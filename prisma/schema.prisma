@@ -1,0 +1,132 @@
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+// Represents one of the client websites (gotolatest, hehe, sunnest)
+model ClientSite {
+  id          String       @id // e.g. "gotolatest", "hehe", "sunnest"
+  name        String
+  baseUrl     String       // e.g. "https://gotolatest.com"
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  seoConfigs  SeoConfig[]
+  blogs       Blog[]
+  redirects   Redirect[]
+  trackerConfig TrackerConfig?
+  robotsRules RobotsRule[]
+  leads       Lead[]
+}
+
+// Page-specific On-Page SEO and OG parameters
+model SeoConfig {
+  id             String     @id @default(uuid())
+  siteId         String
+  site           ClientSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  path           String     // e.g. "/" or "/about"
+  title          String
+  description    String
+  canonicalUrl   String?
+  robots         String     @default("index, follow") // index/noindex directives
+  
+  // Open Graph
+  ogTitle        String?
+  ogDescription  String?
+  ogImage        String?
+  ogType         String     @default("website")
+
+  // Twitter
+  twitterCard    String     @default("summary_large_image")
+  twitterTitle   String?
+  twitterDescription String?
+  twitterImage   String?
+
+  // Schema Markup
+  schemaMarkup   String?    // JSON string containing custom JSON-LD schema
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([siteId, path])
+}
+
+// Blog Posts managed via CMS
+model Blog {
+  id             String     @id @default(uuid())
+  siteId         String
+  site           ClientSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  title          String
+  slug           String
+  content        String     // Markdown or HTML content
+  summary        String?
+  featuredImage  String?
+  published      Boolean    @default(false)
+  category       String?
+  tags           String?    // Comma-separated values
+  publishedAt    DateTime   @default(now())
+  
+  // Custom SEO Overrides for Blog
+  seoTitle       String?
+  seoDescription String?
+  seoOgImage     String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([siteId, slug])
+}
+
+// Dynamic redirects configuration
+model Redirect {
+  id             String     @id @default(uuid())
+  siteId         String
+  site           ClientSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  sourcePath     String     // e.g. "/old-link"
+  destinationPath String    // e.g. "/blog/new-link"
+  statusCode     Int        @default(301) // 301 or 302
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@unique([siteId, sourcePath])
+}
+
+// Tracking scripts and Marketing Pixels
+model TrackerConfig {
+  id             String     @id @default(uuid())
+  siteId         String     @unique
+  site           ClientSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  googleAnalyticsId String?  // GA4 Measurement ID
+  metaPixelId    String?    // Facebook Pixel ID
+  searchConsoleTag String?  // Verification meta tag
+  headerScripts  String?    // Raw custom HTML scripts for head
+  footerScripts  String?    // Raw custom HTML scripts for body end
+  updatedAt      DateTime   @updatedAt
+}
+
+// Robots.txt instructions
+model RobotsRule {
+  id             String     @id @default(uuid())
+  siteId         String
+  site           ClientSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  userAgent      String     @default("*")
+  allowPaths     String?    // Comma-separated paths
+  disallowPaths  String?    // Comma-separated paths
+  updatedAt      DateTime   @updatedAt
+}
+
+// Centralized leads collection
+model Lead {
+  id             String     @id @default(uuid())
+  siteId         String
+  site           ClientSite @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  formName       String     @default("Contact Form")
+  name           String
+  email          String
+  phone          String?
+  message        String?
+  metadata       String?    // JSON string for custom form values
+  createdAt      DateTime   @default(now())
+}
