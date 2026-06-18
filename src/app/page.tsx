@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   LayoutDashboard,
   Globe,
@@ -152,6 +152,9 @@ export default function Dashboard() {
   const [blogMessage, setBlogMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [showAiWizard, setShowAiWizard] = useState<boolean>(false);
   const [contentViewMode, setContentViewMode] = useState<'raw' | 'preview'>('raw');
+  const [selectedEditorImage, setSelectedEditorImage] = useState<HTMLImageElement | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  const savedRangeRef = useRef<Range | null>(null);
 
   // AI Assistant State
   const [aiPrompt, setAiPrompt] = useState<string>('');
@@ -618,6 +621,8 @@ export default function Dashboard() {
       template: '',
     });
     setContentViewMode('raw');
+    setSelectedEditorImage(null);
+    savedRangeRef.current = null;
   };
 
   // Apply AI-generated blog (from the wizard) to the editor form
@@ -638,6 +643,8 @@ export default function Dashboard() {
       template: result.template,
     });
     setContentViewMode('preview');
+    setSelectedEditorImage(null);
+    savedRangeRef.current = null;
     setShowAiWizard(false);
     setBlogMessage({
       type: 'success',
@@ -664,7 +671,128 @@ export default function Dashboard() {
       template: blog.template || '',
     });
     setContentViewMode('raw');
+    setSelectedEditorImage(null);
+    savedRangeRef.current = null;
     setAiPrompt(blog.title); // Pre-fill AI prompt with blog title
+  };
+
+  // Save the editor's current cursor/selection position so it survives async
+  // gaps (like the native file picker dialog) that would otherwise clear it.
+  const saveEditorSelection = () => {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && editorRef.current && editorRef.current.contains(sel.anchorNode)) {
+      savedRangeRef.current = sel.getRangeAt(0).cloneRange();
+    }
+  };
+
+  const getEditorImageAlign = (img: HTMLImageElement): 'left' | 'center' | 'right' =>
+    (img.dataset.ebAlign as 'left' | 'center' | 'right') || 'center';
+  const getEditorImageWidth = (img: HTMLImageElement): number => Number(img.dataset.ebWidth) || 60;
+
+  const restyleEditorImage = (img: HTMLImageElement, align: 'left' | 'center' | 'right', widthPct: number) => {
+    img.dataset.ebAlign = align;
+    img.dataset.ebWidth = String(widthPct);
+    const base = 'border-radius:8px; max-width:100%; height:auto;';
+    if (align === 'left') {
+      img.style.cssText = `${base} float:left; width:${widthPct}%; margin:6px 20px 14px 0;`;
+    } else if (align === 'right') {
+      img.style.cssText = `${base} float:right; width:${widthPct}%; margin:6px 0 14px 20px;`;
+    } else {
+      img.style.cssText = `${base} display:block; margin:18px auto; width:${widthPct}%;`;
+    }
+  };
+
+  const syncEditorContent = () => {
+    if (editorRef.current) {
+      setBlogForm(prev => ({ ...prev, content: editorRef.current!.innerHTML }));
+    }
+  };
+
+  const applyEditorImageAlign = (align: 'left' | 'center' | 'right') => {
+    if (!selectedEditorImage) return;
+    restyleEditorImage(selectedEditorImage, align, getEditorImageWidth(selectedEditorImage));
+    syncEditorContent();
+  };
+
+  const applyEditorImageWidth = (pct: number) => {
+    if (!selectedEditorImage) return;
+    restyleEditorImage(selectedEditorImage, getEditorImageAlign(selectedEditorImage), pct);
+    syncEditorContent();
+  };
+
+  const removeEditorImage = () => {
+    if (!selectedEditorImage) return;
+    selectedEditorImage.remove();
+    setSelectedEditorImage(null);
+    syncEditorContent();
+  };
+
+  const deselectEditorImage = () => {
+    if (selectedEditorImage) {
+      selectedEditorImage.style.outline = '';
+      selectedEditorImage.style.outlineOffset = '';
+    }
+    setSelectedEditorImage(null);
+  };
+
+  const selectEditorImage = (img: HTMLImageElement) => {
+    if (selectedEditorImage && selectedEditorImage !== img) {
+      selectedEditorImage.style.outline = '';
+      selectedEditorImage.style.outlineOffset = '';
+    }
+    img.style.outline = '3px solid #6366f1';
+    img.style.outlineOffset = '2px';
+    setSelectedEditorImage(img);
+  };
+
+  // Insert an uploaded image at the last known cursor position inside the
+  // visual editor. Native file pickers blur the page and clear the live
+  // selection, so we restore a saved Range instead of relying on
+  // document.execCommand's "current selection" (which would otherwise be
+  // gone by the time the upload finishes).
+  const insertEditorImage = (url: string, alt: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    editor.focus();
+    const sel = window.getSelection();
+    let range: Range;
+    if (savedRangeRef.current && editor.contains(savedRangeRef.current.startContainer)) {
+      range = savedRangeRef.current;
+    } else {
+      range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+    }
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = alt;
+    img.className = 'editable-blog-image';
+    restyleEditorImage(img, 'center', 60);
+
+    range.deleteContents();
+    range.insertNode(img);
+
+    // Left/right aligned images use CSS float, which is taken out of normal
+    // text flow — clicking in empty space below a float can otherwise land
+    // the cursor before it instead of after. A trailing space gives the
+    // user a real in-flow anchor immediately after the image to click/type
+    // into reliably.
+    const anchor = document.createTextNode(' ');
+    img.after(anchor);
+
+    const after = document.createRange();
+    after.setStartAfter(anchor);
+    after.collapse(true);
+    sel?.removeAllRanges();
+    sel?.addRange(after);
+    savedRangeRef.current = after.cloneRange();
+
+    syncEditorContent();
+    selectEditorImage(img);
   };
 
   return (
@@ -1502,6 +1630,7 @@ export default function Dashboard() {
                                   className="hidden"
                                   onChange={async (e) => {
                                     const file = e.target.files?.[0];
+                                    const inputEl = e.target;
                                     if (!file) return;
                                     const formData = new FormData();
                                     formData.append('file', file);
@@ -1513,33 +1642,91 @@ export default function Dashboard() {
                                       });
                                       if (res.ok) {
                                         const json = await res.json();
-                                        const imgHtml = `<img src="${json.url}" alt="${file.name}" style="width: 100%; max-width: 500px; display: block; margin: 16px auto; cursor: pointer; border-radius: 8px;" class="editable-blog-image" />`;
-                                        document.execCommand('insertHTML', false, imgHtml);
+                                        insertEditorImage(json.url, file.name);
                                       } else {
                                         alert('Failed to upload image.');
                                       }
                                     } catch (err) {
                                       console.error(err);
                                       alert('Upload error.');
+                                    } finally {
+                                      inputEl.value = '';
                                     }
                                   }}
                                 />
                               </label>
                             </div>
 
+                            {/* Image alignment & size toolbar — shown when an image is selected */}
+                            {selectedEditorImage && (
+                              <div className="bg-indigo-50 border-b border-indigo-200 px-3 py-2 flex flex-wrap items-center gap-2 text-[10px]">
+                                <span className="font-bold text-indigo-700">Image:</span>
+                                <div className="flex gap-1">
+                                  {([['left', '⬅ Left'], ['center', '◻ Center'], ['right', '➡ Right']] as const).map(([align, label]) => (
+                                    <button
+                                      key={align}
+                                      type="button"
+                                      onClick={() => applyEditorImageAlign(align)}
+                                      className={`px-2 py-1 rounded border font-bold transition-colors ${
+                                        getEditorImageAlign(selectedEditorImage) === align
+                                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                                          : 'bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+                                      }`}
+                                    >
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="w-px h-4 bg-indigo-200" />
+                                <span className="font-bold text-indigo-700">Size:</span>
+                                <div className="flex gap-1">
+                                  {[25, 40, 60, 80, 100].map((pct) => (
+                                    <button
+                                      key={pct}
+                                      type="button"
+                                      onClick={() => applyEditorImageWidth(pct)}
+                                      className={`px-2 py-1 rounded border font-bold transition-colors ${
+                                        getEditorImageWidth(selectedEditorImage) === pct
+                                          ? 'bg-indigo-600 border-indigo-600 text-white'
+                                          : 'bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+                                      }`}
+                                    >
+                                      {pct}%
+                                    </button>
+                                  ))}
+                                </div>
+                                <div className="w-px h-4 bg-indigo-200" />
+                                <button type="button" onClick={removeEditorImage} className="px-2 py-1 rounded border border-red-200 bg-white text-red-600 font-bold hover:bg-red-50">
+                                  Remove
+                                </button>
+                                <button type="button" onClick={deselectEditorImage} className="ml-auto px-2 py-1 text-slate-500 font-bold hover:text-slate-700">
+                                  Done
+                                </button>
+                              </div>
+                            )}
+
                             {/* Content Editable Container */}
                             <div
                               contentEditable
                               suppressContentEditableWarning
                               onInput={(e) => {
-                                setBlogForm(prev => ({ ...prev, content: e.currentTarget.innerHTML }));
+                                const html = e.currentTarget.innerHTML;
+                                setBlogForm(prev => ({ ...prev, content: html }));
                               }}
                               onBlur={(e) => {
-                                setBlogForm(prev => ({ ...prev, content: e.currentTarget.innerHTML }));
+                                if (selectedEditorImage) {
+                                  selectedEditorImage.style.outline = '';
+                                  selectedEditorImage.style.outlineOffset = '';
+                                }
+                                const html = e.currentTarget.innerHTML;
+                                setBlogForm(prev => ({ ...prev, content: html }));
                               }}
+                              onMouseUp={saveEditorSelection}
+                              onKeyUp={saveEditorSelection}
                               className="w-full h-[400px] overflow-y-auto bg-white text-slate-900 p-6 focus:outline-none blog-visual-editor-content prose max-w-none"
                               style={{ minHeight: '350px' }}
                               ref={(el) => {
+                                editorRef.current = el;
                                 if (el && document.activeElement !== el && el.innerHTML !== (blogForm.content || '')) {
                                   el.innerHTML = blogForm.content || '';
                                 }
@@ -1547,21 +1734,16 @@ export default function Dashboard() {
                               onClick={(e) => {
                                 const target = e.target as HTMLElement;
                                 if (target.tagName === 'IMG') {
-                                  const newWidth = prompt('Enter new image width (e.g. 50% or 300px):', target.style.maxWidth || '100%');
-                                  if (newWidth !== null) {
-                                    target.style.maxWidth = newWidth;
-                                    target.style.width = '100%';
-                                    // Trigger content update
-                                    const editorEl = e.currentTarget;
-                                    setBlogForm(prev => ({ ...prev, content: editorEl.innerHTML }));
-                                  }
+                                  selectEditorImage(target as HTMLImageElement);
+                                } else {
+                                  deselectEditorImage();
                                 }
                               }}
                             />
-                            
+
                             {/* Editor Tips Footer */}
                             <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none">
-                              <span>💡 Click on any image in the editor to resize it (e.g., 50% or 350px).</span>
+                              <span>💡 Click any image to align it left/center/right and pick a size.</span>
                               <span className="font-bold text-indigo-600">Visual Editor Active</span>
                             </div>
                           </div>
