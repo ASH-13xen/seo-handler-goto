@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
+import { put } from '@vercel/blob';
 import path from 'path';
 
 export async function POST(request: Request) {
@@ -13,17 +13,12 @@ export async function POST(request: Request) {
     }
 
     const safeSiteId = (siteId || 'general').replace(/[^a-zA-Z0-9_-]/g, '') || 'general';
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-
     const ext = path.extname(file.name) || '.png';
-    const fileName = `upload-${Date.now()}${ext}`;
-    const dir = path.join(process.cwd(), 'public', 'uploads', 'blogs', safeSiteId);
-    
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, fileName), buffer);
+    const pathname = `blogs/${safeSiteId}/upload-${Date.now()}${ext}`;
 
-    return NextResponse.json({ url: `/uploads/blogs/${safeSiteId}/${fileName}` });
+    const blob = await put(pathname, file, { access: 'public' });
+
+    return NextResponse.json({ url: blob.url });
   } catch (error: any) {
     console.error('File upload error:', error);
     return NextResponse.json({ error: 'Internal server error', details: error.message }, { status: 500 });

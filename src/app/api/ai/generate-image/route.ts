@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { put } from '@vercel/blob';
 
 // Gemini's "Nano Banana" image-generation model family. Same GEMINI_API_KEY,
 // no extra signup needed. If this model isn't enabled for the configured key,
@@ -79,11 +78,11 @@ export async function POST(request: Request) {
     const safeSiteId = String(siteId).replace(/[^a-zA-Z0-9_-]/g, '') || 'site';
     const safeSlug = String(slug).replace(/[^a-zA-Z0-9_-]/g, '') || 'image';
     const fileName = `${safeSlug}-${Date.now()}.${extension}`;
-    const dir = path.join(process.cwd(), 'public', 'uploads', 'blogs', safeSiteId);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, fileName), buffer);
+    const pathname = `blogs/${safeSiteId}/${fileName}`;
 
-    return NextResponse.json({ url: `/uploads/blogs/${safeSiteId}/${fileName}` });
+    const blob = await put(pathname, buffer, { access: 'public', contentType: mimeType });
+
+    return NextResponse.json({ url: blob.url });
   } catch (error: any) {
     console.error('AI Image Generation error:', error);
     return NextResponse.json({ error: 'Internal server error', details: error.message }, { status: 500 });
