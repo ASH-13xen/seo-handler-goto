@@ -20,7 +20,8 @@ import {
   ExternalLink,
   ChevronRight,
   TrendingUp,
-  Code2
+  Code2,
+  Upload
 } from 'lucide-react';
 import BlogAIWizard, { BlogAIWizardResult } from '@/components/BlogAIWizard';
 
@@ -1317,13 +1318,46 @@ export default function Dashboard() {
                       </div>
                       <div className="md:col-span-2">
                         <label className="block text-xs font-semibold text-slate-400 mb-1">Featured Image URL</label>
-                        <input
-                          type="text"
-                          value={blogForm.featuredImage || ''}
-                          onChange={(e) => setBlogForm(prev => ({ ...prev, featuredImage: e.target.value }))}
-                          placeholder="Image link (Unsplash, Pexels, local assets)"
-                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
-                        />
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={blogForm.featuredImage || ''}
+                            onChange={(e) => setBlogForm(prev => ({ ...prev, featuredImage: e.target.value }))}
+                            placeholder="Image link (Unsplash, Pexels, local assets)"
+                            className="flex-1 bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
+                          />
+                          <label className="bg-slate-900 border border-slate-800 hover:bg-slate-805 text-slate-200 text-xs px-3.5 py-2 rounded-lg cursor-pointer flex items-center gap-1.5 font-bold transition-all whitespace-nowrap">
+                            <Upload className="h-3.5 w-3.5 text-indigo-400" />
+                            Upload File
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                const formData = new FormData();
+                                formData.append('file', file);
+                                formData.append('siteId', selectedSite || 'general');
+                                try {
+                                  const res = await fetch('/api/upload', {
+                                    method: 'POST',
+                                    body: formData,
+                                  });
+                                  if (res.ok) {
+                                    const json = await res.json();
+                                    setBlogForm(prev => ({ ...prev, featuredImage: json.url }));
+                                  } else {
+                                    alert('Failed to upload image.');
+                                  }
+                                } catch (err) {
+                                  console.error(err);
+                                  alert('Upload error.');
+                                }
+                              }}
+                            />
+                          </label>
+                        </div>
                       </div>
                       <div className="md:col-span-2">
                         <label className="block text-xs font-semibold text-slate-400 mb-1">Summary / Teaser</label>
@@ -1357,13 +1391,13 @@ export default function Dashboard() {
                               }`}
                             >
                               <Eye className="h-3 w-3" />
-                              Preview
+                              Visual Editor
                             </button>
                           </div>
                         </div>
                         {contentViewMode === 'raw' ? (
                           <textarea
-                            rows={10}
+                            rows={15}
                             required
                             value={blogForm.content || ''}
                             onChange={(e) => setBlogForm(prev => ({ ...prev, content: e.target.value }))}
@@ -1371,19 +1405,165 @@ export default function Dashboard() {
                             className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500 font-mono"
                           />
                         ) : (
-                          <div className="rounded-lg border border-slate-800 bg-white overflow-hidden">
-                            {blogForm.content ? (
-                              <iframe
-                                sandbox=""
-                                srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8" /><style>body{margin:0;padding:24px;font-family:system-ui,sans-serif;color:#1f2937;background:#fff;}</style></head><body>${blogForm.content}</body></html>`}
-                                className="w-full h-[420px]"
-                                title="Content preview"
-                              />
-                            ) : (
-                              <div className="h-[420px] flex items-center justify-center text-xs text-slate-500">
-                                Nothing to preview yet — write or generate content first.
-                              </div>
-                            )}
+                          <div className="rounded-lg border border-slate-850 bg-white overflow-hidden flex flex-col">
+                            {/* Visual Editor Toolbar */}
+                            <div className="bg-slate-100 border-b border-slate-200 px-3 py-2 flex flex-wrap gap-1.5 items-center select-none">
+                              {/* Bold, Italic, Underline */}
+                              <button
+                                type="button"
+                                title="Bold (Ctrl+B)"
+                                onClick={() => document.execCommand('bold', false)}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors font-bold text-xs shadow-sm"
+                              >
+                                B
+                              </button>
+                              <button
+                                type="button"
+                                title="Italic (Ctrl+I)"
+                                onClick={() => document.execCommand('italic', false)}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors italic text-xs shadow-sm"
+                              >
+                                I
+                              </button>
+                              <button
+                                type="button"
+                                title="Underline (Ctrl+U)"
+                                onClick={() => document.execCommand('underline', false)}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors underline text-xs shadow-sm"
+                              >
+                                U
+                              </button>
+                              <div className="w-px h-5 bg-slate-300 mx-1" />
+
+                              {/* Headings */}
+                              <button
+                                type="button"
+                                title="Heading 2"
+                                onClick={() => document.execCommand('formatBlock', false, 'H2')}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-black text-[10px] shadow-sm uppercase"
+                              >
+                                H2
+                              </button>
+                              <button
+                                type="button"
+                                title="Heading 3"
+                                onClick={() => document.execCommand('formatBlock', false, 'H3')}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-bold text-[10px] shadow-sm uppercase"
+                              >
+                                H3
+                              </button>
+                              <button
+                                type="button"
+                                title="Normal Paragraph"
+                                onClick={() => document.execCommand('formatBlock', false, 'P')}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
+                              >
+                                Paragraph
+                              </button>
+                              <div className="w-px h-5 bg-slate-300 mx-1" />
+
+                              {/* Lists */}
+                              <button
+                                type="button"
+                                title="Unordered List"
+                                onClick={() => document.execCommand('insertUnorderedList', false)}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
+                              >
+                                • Bullet List
+                              </button>
+                              <button
+                                type="button"
+                                title="Ordered List"
+                                onClick={() => document.execCommand('insertOrderedList', false)}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
+                              >
+                                1. Number List
+                              </button>
+                              <div className="w-px h-5 bg-slate-300 mx-1" />
+
+                              {/* Quote block */}
+                              <button
+                                type="button"
+                                title="Blockquote"
+                                onClick={() => document.execCommand('formatBlock', false, 'BLOCKQUOTE')}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm italic font-semibold"
+                              >
+                                Quote
+                              </button>
+                              <div className="w-px h-5 bg-slate-300 mx-1" />
+
+                              {/* Upload and Insert Image */}
+                              <label className="px-2.5 py-1 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer text-[10px] font-bold shadow-sm flex items-center gap-1">
+                                <Upload className="h-3 w-3" />
+                                Add Body Image
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  className="hidden"
+                                  onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (!file) return;
+                                    const formData = new FormData();
+                                    formData.append('file', file);
+                                    formData.append('siteId', selectedSite || 'general');
+                                    try {
+                                      const res = await fetch('/api/upload', {
+                                        method: 'POST',
+                                        body: formData,
+                                      });
+                                      if (res.ok) {
+                                        const json = await res.json();
+                                        const imgHtml = `<img src="${json.url}" alt="${file.name}" style="width: 100%; max-width: 500px; display: block; margin: 16px auto; cursor: pointer; border-radius: 8px;" class="editable-blog-image" />`;
+                                        document.execCommand('insertHTML', false, imgHtml);
+                                      } else {
+                                        alert('Failed to upload image.');
+                                      }
+                                    } catch (err) {
+                                      console.error(err);
+                                      alert('Upload error.');
+                                    }
+                                  }}
+                                />
+                              </label>
+                            </div>
+
+                            {/* Content Editable Container */}
+                            <div
+                              contentEditable
+                              suppressContentEditableWarning
+                              onInput={(e) => {
+                                setBlogForm(prev => ({ ...prev, content: e.currentTarget.innerHTML }));
+                              }}
+                              onBlur={(e) => {
+                                setBlogForm(prev => ({ ...prev, content: e.currentTarget.innerHTML }));
+                              }}
+                              className="w-full h-[400px] overflow-y-auto bg-white text-slate-900 p-6 focus:outline-none blog-visual-editor-content prose max-w-none"
+                              style={{ minHeight: '350px' }}
+                              ref={(el) => {
+                                if (el && document.activeElement !== el && el.innerHTML !== (blogForm.content || '')) {
+                                  el.innerHTML = blogForm.content || '';
+                                }
+                              }}
+                              onClick={(e) => {
+                                const target = e.target as HTMLElement;
+                                if (target.tagName === 'IMG') {
+                                  const newWidth = prompt('Enter new image width (e.g. 50% or 300px):', target.style.maxWidth || '100%');
+                                  if (newWidth !== null) {
+                                    target.style.maxWidth = newWidth;
+                                    target.style.width = '100%';
+                                    // Trigger content update
+                                    const editorEl = e.currentTarget;
+                                    setBlogForm(prev => ({ ...prev, content: editorEl.innerHTML }));
+                                  }
+                                }
+                              }}
+                            />
+                            
+                            {/* Editor Tips Footer */}
+                            <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none">
+                              <span>💡 Click on any image in the editor to resize it (e.g., 50% or 350px).</span>
+                              <span className="font-bold text-indigo-600">Visual Editor Active</span>
+                            </div>
                           </div>
                         )}
                       </div>
