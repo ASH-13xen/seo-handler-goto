@@ -9,7 +9,7 @@ const IMAGE_MODEL = 'gemini-2.5-flash-image';
 
 export async function POST(request: Request) {
   try {
-    const { prompt, siteId, slug } = await request.json();
+    const { prompt, siteId, slug, aspectRatio, imageStyle } = await request.json();
     const apiKey = process.env.GEMINI_API_KEY;
 
     if (!apiKey) {
@@ -19,6 +19,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'prompt, siteId, and slug are required' }, { status: 400 });
     }
 
+    let styleDescription = 'photorealistic, editorial-style';
+    if (imageStyle === 'illustration') {
+      styleDescription = 'digital art illustration, vibrant colors';
+    } else if (imageStyle === 'vector') {
+      styleDescription = 'minimalist vector graphic, clean shapes, flat colors';
+    } else if (imageStyle === '3d') {
+      styleDescription = '3D render, high detail, modern CGI, octane render style';
+    }
+
+    let aspectDescription = 'Widescreen 16:9 composition';
+    if (aspectRatio === '1:1') {
+      aspectDescription = 'Square 1:1 composition';
+    } else if (aspectRatio === '4:3') {
+      aspectDescription = 'Standard 4:3 photography composition';
+    } else if (aspectRatio === '9:16') {
+      aspectDescription = 'Vertical 9:16 portrait composition';
+    }
+
+    const finalPrompt = `Generate a high quality, ${styleDescription} blog photo. No text, no watermarks, no logos, no captions baked into the image. ${aspectDescription}. Context: ${prompt}`;
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${apiKey}`,
       {
@@ -27,7 +47,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           contents: [{
             parts: [{
-              text: `Generate a high quality, photorealistic, editorial-style blog header photo. No text, no watermarks, no logos, no captions baked into the image. Widescreen composition. ${prompt}`,
+              text: finalPrompt,
             }],
           }],
           generationConfig: {

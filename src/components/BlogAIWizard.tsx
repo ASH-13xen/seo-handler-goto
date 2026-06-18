@@ -43,10 +43,13 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
   const [topic, setTopic] = useState('');
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState('');
+  const [includeText, setIncludeText] = useState('');
   const [template, setTemplate] = useState<TemplateId | 'auto'>('auto');
   const [tone, setTone] = useState<ToneId>('professional');
   const [length, setLength] = useState<LengthId>('medium');
   const [imageStrategy, setImageStrategy] = useState<ImageStrategy>('placeholder');
+  const [aspectRatio, setAspectRatio] = useState<'16:9' | '1:1' | '4:3' | '9:16'>('16:9');
+  const [imageStyle, setImageStyle] = useState<'photo' | 'illustration' | 'vector' | '3d'>('photo');
   const [includeInlineImages, setIncludeInlineImages] = useState(false);
   const [inlineImageCount, setInlineImageCount] = useState<1 | 2>(1);
 
@@ -68,7 +71,7 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
       const res = await fetch('/api/ai/generate-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, siteId, slug: slugForFile }),
+        body: JSON.stringify({ prompt, siteId, slug: slugForFile, aspectRatio, imageStyle }),
       });
       if (!res.ok) return null;
       const json = await res.json();
@@ -86,7 +89,7 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
       const res = await fetch('/api/ai/generate-blog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topic, keyword, category, template, tone, length, siteId }),
+        body: JSON.stringify({ topic, keyword, category, template, tone, length, siteId, includeText }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -219,6 +222,16 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
                     />
                   </div>
                 </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Specific text / Key points to include (optional)</label>
+                  <textarea
+                    rows={3}
+                    value={includeText}
+                    onChange={(e) => setIncludeText(e.target.value)}
+                    placeholder="e.g. Include specific facts, figures, quotes, or services that Gemini must write about..."
+                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
               </div>
             )}
 
@@ -315,31 +328,81 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
                 </div>
 
                 {imageStrategy === 'ai' && (
-                  <div className="pt-2 border-t border-slate-800/80">
-                    <label className="flex items-center gap-2 cursor-pointer select-none mb-2">
-                      <input
-                        type="checkbox"
-                        checked={includeInlineImages}
-                        onChange={(e) => setIncludeInlineImages(e.target.checked)}
-                        className="h-4 w-4 accent-indigo-600 rounded bg-slate-950 border border-slate-800"
-                      />
-                      <span className="text-sm font-semibold text-slate-200">Also add inline images inside the article body</span>
-                    </label>
-                    {includeInlineImages && (
-                      <div className="flex gap-2 ml-6">
-                        {[1, 2].map((n) => (
-                          <button
-                            key={n}
-                            onClick={() => setInlineImageCount(n as 1 | 2)}
-                            className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
-                              inlineImageCount === n ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300'
-                            }`}
-                          >
-                            {n} image{n > 1 ? 's' : ''}
-                          </button>
-                        ))}
+                  <div className="space-y-4 pt-3 border-t border-slate-800/80">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1.5">Aspect ratio (Size)</label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {[
+                            { id: '16:9', label: 'Widescreen (16:9)' },
+                            { id: '1:1', label: 'Square (1:1)' },
+                            { id: '4:3', label: 'Classic (4:3)' },
+                            { id: '9:16', label: 'Vertical (9:16)' },
+                          ].map((opt) => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setAspectRatio(opt.id as any)}
+                              className={`px-2 py-2 rounded-lg border text-[11px] font-bold text-center transition-all ${
+                                aspectRatio === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-400 hover:border-slate-700'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                    )}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 mb-1.5">Artistic style</label>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {[
+                            { id: 'photo', label: 'Photo' },
+                            { id: 'illustration', label: 'Illustration' },
+                            { id: 'vector', label: 'Vector' },
+                            { id: '3d', label: '3D Render' },
+                          ].map((opt) => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setImageStyle(opt.id as any)}
+                              className={`px-2 py-2 rounded-lg border text-[11px] font-bold text-center transition-all ${
+                                imageStyle === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-400 hover:border-slate-700'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/80">
+                      <label className="flex items-center gap-2 cursor-pointer select-none mb-2">
+                        <input
+                          type="checkbox"
+                          checked={includeInlineImages}
+                          onChange={(e) => setIncludeInlineImages(e.target.checked)}
+                          className="h-4 w-4 accent-indigo-600 rounded bg-slate-950 border border-slate-800"
+                        />
+                        <span className="text-sm font-semibold text-slate-200">Also add inline images inside the article body</span>
+                      </label>
+                      {includeInlineImages && (
+                        <div className="flex gap-2 ml-6">
+                          {[1, 2].map((n) => (
+                            <button
+                              key={n}
+                              type="button"
+                              onClick={() => setInlineImageCount(n as 1 | 2)}
+                              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+                                inlineImageCount === n ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300'
+                              }`}
+                            >
+                              {n} image{n > 1 ? 's' : ''}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

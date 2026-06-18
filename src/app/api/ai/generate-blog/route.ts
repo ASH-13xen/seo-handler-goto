@@ -67,7 +67,7 @@ Rules: Plain text only inside text fields — no markdown headers, no HTML tags.
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { topic, keyword, category, tone, length } = body;
+    const { topic, keyword, category, tone, length, includeText } = body;
     const requestedTemplate: TemplateId | 'auto' = body.template;
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -96,7 +96,7 @@ export async function POST(request: Request) {
       (length as LengthId) || 'medium',
       category
     );
-    const userPrompt = `Topic/brief: ${topic}${keyword ? `\nTarget keyword: ${keyword}` : ''}`;
+    const userPrompt = `Topic/brief: ${topic}${keyword ? `\nTarget keyword: ${keyword}` : ''}${includeText ? `\nSpecific text / Key points to include (incorporate this text directly or adhere to these details strictly): ${includeText}` : ''}`;
     const schema = buildGeminiSchema(resolvedTemplate);
 
     const data = await callGemini(apiKey, systemInstruction, userPrompt, schema);
