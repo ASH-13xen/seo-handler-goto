@@ -17,7 +17,7 @@ const migrationSqlPath = path.join(
   process.cwd(),
   'prisma',
   'migrations',
-  '20260618162253_init',
+  '20260618205852_add_blog_template_field',
   'migration.sql'
 );
 
