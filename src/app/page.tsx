@@ -19,8 +19,10 @@ import {
   Search,
   ExternalLink,
   ChevronRight,
-  TrendingUp
+  TrendingUp,
+  Code2
 } from 'lucide-react';
+import BlogAIWizard, { BlogAIWizardResult } from '@/components/BlogAIWizard';
 
 interface SiteStats {
   id: string;
@@ -68,6 +70,7 @@ interface BlogPost {
   seoTitle: string;
   seoDescription: string;
   seoOgImage: string;
+  template?: string;
   publishedAt: string;
 }
 
@@ -143,8 +146,11 @@ export default function Dashboard() {
     seoTitle: '',
     seoDescription: '',
     seoOgImage: '',
+    template: '',
   });
   const [blogMessage, setBlogMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showAiWizard, setShowAiWizard] = useState<boolean>(false);
+  const [contentViewMode, setContentViewMode] = useState<'raw' | 'preview'>('raw');
 
   // AI Assistant State
   const [aiPrompt, setAiPrompt] = useState<string>('');
@@ -595,16 +601,6 @@ export default function Dashboard() {
     }
   };
 
-  // Apply AI Outline to Blog Content
-  const applyAiOutlineToBlog = () => {
-    if (aiResult?.type === 'outline' && aiResult?.data?.outline) {
-      setBlogForm(prev => ({
-        ...prev,
-        content: (prev.content || '') + `<h3>AI-Generated Outline Suggestions</h3>\n${aiResult.data.outline}`,
-      }));
-    }
-  };
-
   const resetBlogForm = () => {
     setBlogForm({
       title: '',
@@ -618,6 +614,35 @@ export default function Dashboard() {
       seoTitle: '',
       seoDescription: '',
       seoOgImage: '',
+      template: '',
+    });
+    setContentViewMode('raw');
+  };
+
+  // Apply AI-generated blog (from the wizard) to the editor form
+  const handleAiBlogGenerated = (result: BlogAIWizardResult) => {
+    setSelectedBlog(null);
+    setBlogForm({
+      title: result.title || '',
+      slug: result.slug || '',
+      summary: result.summary || '',
+      content: result.content || '',
+      featuredImage: result.featuredImage || '',
+      published: false,
+      category: result.category || '',
+      tags: result.tags || '',
+      seoTitle: result.seoTitle || '',
+      seoDescription: result.seoDescription || '',
+      seoOgImage: '',
+      template: result.template,
+    });
+    setContentViewMode('preview');
+    setShowAiWizard(false);
+    setBlogMessage({
+      type: 'success',
+      text: result.imageSuggestion
+        ? `Draft generated! Suggested image search: "${result.imageSuggestion.query}" (alt text: "${result.imageSuggestion.alt}") — paste a URL into Featured Image above.`
+        : 'Draft generated! Review and edit below, then publish whenever you\'re ready.',
     });
   };
 
@@ -635,7 +660,9 @@ export default function Dashboard() {
       seoTitle: blog.seoTitle || '',
       seoDescription: blog.seoDescription || '',
       seoOgImage: blog.seoOgImage || '',
+      template: blog.template || '',
     });
+    setContentViewMode('raw');
     setAiPrompt(blog.title); // Pre-fill AI prompt with blog title
   };
 
@@ -1231,9 +1258,19 @@ export default function Dashboard() {
                 
                 {/* Editor box */}
                 <div className="glass-panel rounded-2xl p-6 border border-slate-800">
-                  <h3 className="font-bold text-white text-base mb-6 border-l-3 border-indigo-500 pl-2">
-                    {selectedBlog ? `Editing: ${selectedBlog.title}` : 'Draft New Article'}
-                  </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+                    <h3 className="font-bold text-white text-base border-l-3 border-indigo-500 pl-2">
+                      {selectedBlog ? `Editing: ${selectedBlog.title}` : 'Draft New Article'}
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setShowAiWizard(true)}
+                      className="flex items-center gap-1.5 text-xs bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold px-3.5 py-2 rounded-lg transition-colors shadow-md"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      Generate with AI
+                    </button>
+                  </div>
 
                   {blogMessage && (
                     <div className={`p-3.5 mb-6 rounded-xl border flex items-start gap-2.5 text-sm ${
@@ -1299,15 +1336,56 @@ export default function Dashboard() {
                         />
                       </div>
                       <div className="md:col-span-2">
-                        <label className="block text-xs font-semibold text-slate-400 mb-1">Content (HTML or Markdown)</label>
-                        <textarea
-                          rows={6}
-                          required
-                          value={blogForm.content || ''}
-                          onChange={(e) => setBlogForm(prev => ({ ...prev, content: e.target.value }))}
-                          placeholder="Write article details..."
-                          className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 font-sans"
-                        />
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-semibold text-slate-400">Content (HTML)</label>
+                          <div className="flex gap-1 bg-slate-950 border border-slate-800 rounded-lg p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setContentViewMode('raw')}
+                              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors ${
+                                contentViewMode === 'raw' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              <Code2 className="h-3 w-3" />
+                              Raw HTML
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setContentViewMode('preview')}
+                              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors ${
+                                contentViewMode === 'preview' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              <Eye className="h-3 w-3" />
+                              Preview
+                            </button>
+                          </div>
+                        </div>
+                        {contentViewMode === 'raw' ? (
+                          <textarea
+                            rows={10}
+                            required
+                            value={blogForm.content || ''}
+                            onChange={(e) => setBlogForm(prev => ({ ...prev, content: e.target.value }))}
+                            placeholder="Write article details, or click Generate with AI above..."
+                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500 font-mono"
+                          />
+                        ) : (
+                          <div className="rounded-lg border border-slate-800 bg-white overflow-hidden">
+                            {blogForm.content ? (
+                              <iframe
+                                sandbox=""
+                                srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8" /><style>body{margin:0;padding:24px;font-family:system-ui,sans-serif;color:#1f2937;background:#fff;}</style></head><body>${blogForm.content}</body></html>`}
+                                className="w-full h-[420px]"
+                                title="Content preview"
+                              />
+                            ) : (
+                              <div className="h-[420px] flex items-center justify-center text-xs text-slate-500">
+                                Nothing to preview yet — write or generate content first.
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -1382,17 +1460,17 @@ export default function Dashboard() {
                   </form>
                 </div>
 
-                {/* AI Assistant card */}
+                {/* Quick meta-tag tool, handy when editing an already-drafted post */}
                 <div className="glass-panel rounded-2xl p-6 border border-slate-800 border-l-4 border-l-indigo-500">
                   <div className="flex items-center gap-2 mb-3">
                     <div className="h-7 w-7 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-                      <Sparkles className="h-4 w-4 text-indigo-400 animate-pulse" />
+                      <Sparkles className="h-4 w-4 text-indigo-400" />
                     </div>
-                    <h3 className="font-bold text-white text-sm">Gemini AI SEO Assistant</h3>
+                    <h3 className="font-bold text-white text-sm">Quick SEO Meta Tags</h3>
                   </div>
 
                   <p className="text-xs text-slate-400 mb-4">
-                    Enter the topic/keyword and generate optimized parameters or article outlines instantly.
+                    Need to refresh just the SEO title/description for this post? Enter a keyword or title below.
                   </p>
 
                   <div className="flex flex-col md:flex-row gap-2 mb-4">
@@ -1403,24 +1481,14 @@ export default function Dashboard() {
                       onChange={(e) => setAiPrompt(e.target.value)}
                       className="flex-1 bg-slate-950 border border-slate-850 hover:border-slate-750 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500 transition-colors"
                     />
-                    <div className="flex gap-2 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => runAiAssist('meta')}
-                        disabled={aiLoading}
-                        className="px-4 py-2.5 rounded-lg border border-slate-800 bg-slate-950 hover:bg-slate-900 font-bold text-xs text-indigo-400 transition-colors"
-                      >
-                        {aiLoading ? 'Thinking...' : 'AI Meta Tags'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => runAiAssist('outline')}
-                        disabled={aiLoading}
-                        className="px-4 py-2.5 rounded-lg border border-indigo-600/30 bg-indigo-600/10 hover:bg-indigo-600/20 font-bold text-xs text-indigo-400 transition-colors animate-pulse"
-                      >
-                        AI Outline
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => runAiAssist('meta')}
+                      disabled={aiLoading}
+                      className="px-4 py-2.5 rounded-lg border border-slate-800 bg-slate-950 hover:bg-slate-900 font-bold text-xs text-indigo-400 transition-colors shrink-0"
+                    >
+                      {aiLoading ? 'Thinking...' : 'Regenerate Meta Tags'}
+                    </button>
                   </div>
 
                   {aiError && (
@@ -1430,51 +1498,33 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {aiResult && (
+                  {aiResult?.type === 'meta' && (
                     <div className="bg-slate-950/60 rounded-xl p-4 border border-slate-850 space-y-3">
                       <div className="flex justify-between items-center text-[10px] text-slate-400 border-b border-slate-800 pb-2">
                         <span className="uppercase tracking-widest font-extrabold text-indigo-400">AI OUTPUT RESULTS</span>
                         <span>Model: Gemini 2.5 Flash</span>
                       </div>
-
-                      {aiResult.type === 'meta' ? (
-                        <div className="space-y-2">
-                          <div>
-                            <div className="text-[10px] font-semibold text-slate-500 uppercase">Suggested Meta Title</div>
-                            <div className="text-xs text-slate-200 font-bold bg-slate-950 px-2.5 py-1.5 rounded-lg mt-0.5 border border-slate-850">
-                              {aiResult.data.title}
-                            </div>
+                      <div className="space-y-2">
+                        <div>
+                          <div className="text-[10px] font-semibold text-slate-500 uppercase">Suggested Meta Title</div>
+                          <div className="text-xs text-slate-200 font-bold bg-slate-950 px-2.5 py-1.5 rounded-lg mt-0.5 border border-slate-850">
+                            {aiResult.data.title}
                           </div>
-                          <div>
-                            <div className="text-[10px] font-semibold text-slate-500 uppercase">Suggested Meta Description</div>
-                            <div className="text-xs text-slate-200 bg-slate-950 px-2.5 py-1.5 rounded-lg mt-0.5 border border-slate-850">
-                              {aiResult.data.description}
-                            </div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] font-semibold text-slate-500 uppercase">Suggested Meta Description</div>
+                          <div className="text-xs text-slate-200 bg-slate-950 px-2.5 py-1.5 rounded-lg mt-0.5 border border-slate-850">
+                            {aiResult.data.description}
                           </div>
-                          <button
-                            type="button"
-                            onClick={applyAiMetaToBlog}
-                            className="text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1 mt-2"
-                          >
-                            Apply these meta tags to the form above
-                          </button>
                         </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="text-[10px] font-semibold text-slate-500 uppercase mb-1">Generated Outline</div>
-                          <div
-                            dangerouslySetInnerHTML={{ __html: aiResult.data.outline }}
-                            className="text-xs text-slate-300 space-y-1 list-disc pl-2 max-h-48 overflow-y-auto font-sans bg-slate-950 p-2.5 rounded-lg border border-slate-850"
-                          />
-                          <button
-                            type="button"
-                            onClick={applyAiOutlineToBlog}
-                            className="text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1 mt-2"
-                          >
-                            Inject outline to bottom of editor content
-                          </button>
-                        </div>
-                      )}
+                        <button
+                          type="button"
+                          onClick={applyAiMetaToBlog}
+                          className="text-xs font-bold text-emerald-400 hover:text-emerald-300 hover:underline flex items-center gap-1 mt-2"
+                        >
+                          Apply these meta tags to the form above
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -1483,6 +1533,14 @@ export default function Dashboard() {
               </div>
 
             </div>
+          )}
+
+          {showAiWizard && (
+            <BlogAIWizard
+              siteId={selectedSite}
+              onClose={() => setShowAiWizard(false)}
+              onGenerated={handleAiBlogGenerated}
+            />
           )}
 
           {/* 4. REDIRECTS TAB */}

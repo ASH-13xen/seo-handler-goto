@@ -1,0 +1,381 @@
+'use client';
+
+import React, { useState } from 'react';
+import { Sparkles, X, ChevronLeft, ChevronRight, Loader, ImageIcon, AlertCircle } from 'lucide-react';
+import {
+  TEMPLATE_OPTIONS,
+  TONE_OPTIONS,
+  LENGTH_OPTIONS,
+  renderBlogHtml,
+  TemplateId,
+  ToneId,
+  LengthId,
+  GeneratedBlogContent,
+  InlineImage,
+} from '@/lib/blogTemplates';
+
+type ImageStrategy = 'ai' | 'placeholder' | 'suggest' | 'none';
+
+export interface BlogAIWizardResult {
+  title: string;
+  slug: string;
+  summary: string;
+  category: string;
+  tags: string;
+  seoTitle: string;
+  seoDescription: string;
+  content: string;
+  featuredImage: string;
+  template: TemplateId;
+  imageSuggestion?: { query: string; alt: string };
+}
+
+interface BlogAIWizardProps {
+  siteId: string;
+  onClose: () => void;
+  onGenerated: (result: BlogAIWizardResult) => void;
+}
+
+const STEP_LABELS = ['Topic', 'Template', 'Tone & Length', 'Images'];
+
+export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWizardProps) {
+  const [step, setStep] = useState(1);
+  const [topic, setTopic] = useState('');
+  const [keyword, setKeyword] = useState('');
+  const [category, setCategory] = useState('');
+  const [template, setTemplate] = useState<TemplateId | 'auto'>('auto');
+  const [tone, setTone] = useState<ToneId>('professional');
+  const [length, setLength] = useState<LengthId>('medium');
+  const [imageStrategy, setImageStrategy] = useState<ImageStrategy>('placeholder');
+  const [includeInlineImages, setIncludeInlineImages] = useState(false);
+  const [inlineImageCount, setInlineImageCount] = useState<1 | 2>(1);
+
+  const [generating, setGenerating] = useState(false);
+  const [progressLabel, setProgressLabel] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const canGoNext = step === 1 ? topic.trim().length > 0 : true;
+
+  function getSlotList(data: GeneratedBlogContent): { image?: InlineImage }[] | null {
+    if (data.template === 'classic' || data.template === 'news') return data.sections;
+    if (data.template === 'listicle') return data.items;
+    if (data.template === 'howto') return data.steps;
+    return null;
+  }
+
+  async function generateImage(prompt: string, slugForFile: string): Promise<string | null> {
+    try {
+      const res = await fetch('/api/ai/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, siteId, slug: slugForFile }),
+      });
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json.url || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function handleGenerate() {
+    setGenerating(true);
+    setError(null);
+    try {
+      setProgressLabel('Writing your article with Gemini...');
+      const res = await fetch('/api/ai/generate-blog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic, keyword, category, template, tone, length, siteId }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error || 'Failed to generate blog content.');
+      }
+      const data: GeneratedBlogContent = json.data;
+
+      let featuredImage = '';
+      let imageSuggestion: { query: string; alt: string } | undefined;
+
+      if (imageStrategy === 'ai') {
+        setProgressLabel('Generating hero image...');
+        const heroUrl = await generateImage(`${data.heroImageQuery}. Alt text context: ${data.heroImageAlt}`, `${data.slug}-hero`);
+        featuredImage = heroUrl || `https://picsum.photos/seed/${data.slug}/1600/900`;
+
+        if (includeInlineImages) {
+          const slots = getSlotList(data);
+          if (slots && slots.length > 0) {
+            const count = Math.min(inlineImageCount, slots.length);
+            for (let i = 0; i < count; i++) {
+              setProgressLabel(`Generating inline image ${i + 1} of ${count}...`);
+              const slotTitle =
+                (slots[i] as any).heading || (slots[i] as any).title || data.heroImageQuery;
+              const url = await generateImage(`Context for this section: ${slotTitle}. Overall article topic: ${topic}.`, `${data.slug}-inline-${i + 1}`);
+              if (url) {
+                slots[i].image = { url, alt: slotTitle };
+              }
+            }
+          }
+        }
+      } else if (imageStrategy === 'placeholder') {
+        featuredImage = `https://picsum.photos/seed/${data.slug}/1600/900`;
+      } else if (imageStrategy === 'suggest') {
+        imageSuggestion = { query: data.heroImageQuery, alt: data.heroImageAlt };
+      }
+
+      setProgressLabel('Rendering template...');
+      const content = renderBlogHtml(data);
+
+      onGenerated({
+        title: data.title,
+        slug: data.slug,
+        summary: data.summary,
+        category: data.category,
+        tags: data.tags?.join(', ') || '',
+        seoTitle: data.seoTitle,
+        seoDescription: data.seoDescription,
+        content,
+        featuredImage,
+        template: data.template,
+        imageSuggestion,
+      });
+    } catch (err: any) {
+      setError(err.message || 'Something went wrong while generating the post.');
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="glass-panel w-full max-w-2xl rounded-2xl border border-slate-800 p-6 max-h-[90vh] overflow-y-auto scrollbar-hide">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-lg bg-indigo-500/10 flex items-center justify-center">
+              <Sparkles className="h-4 w-4 text-indigo-400" />
+            </div>
+            <h2 className="font-bold text-white text-base">AI Blog Generator</h2>
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-300" disabled={generating}>
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {!generating && (
+          <div className="flex items-center gap-1.5 mb-6">
+            {STEP_LABELS.map((label, i) => (
+              <div key={label} className="flex items-center gap-1.5 flex-1">
+                <div className={`h-1.5 flex-1 rounded-full ${i + 1 <= step ? 'bg-indigo-500' : 'bg-slate-800'}`} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div className="p-3 mb-4 rounded-xl border border-red-500/20 bg-red-500/10 text-red-400 text-xs flex items-start gap-2">
+            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+            {error}
+          </div>
+        )}
+
+        {generating ? (
+          <div className="flex flex-col items-center justify-center py-16 gap-4">
+            <Loader className="h-8 w-8 animate-spin text-indigo-400" />
+            <p className="text-sm text-slate-300 font-semibold">{progressLabel}</p>
+            <p className="text-xs text-slate-500">This can take up to a minute, especially with images.</p>
+          </div>
+        ) : (
+          <>
+            {step === 1 && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">What's this post about?</label>
+                  <textarea
+                    rows={4}
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder="e.g. Why small businesses in Chhattisgarh should invest in local SEO before festive season"
+                    className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">Target keyword (optional)</label>
+                    <input
+                      type="text"
+                      value={keyword}
+                      onChange={(e) => setKeyword(e.target.value)}
+                      placeholder="e.g. local seo tips"
+                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 mb-1.5">Category (optional)</label>
+                    <input
+                      type="text"
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      placeholder="e.g. Marketing"
+                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 2 && (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-400 mb-2">Pick the layout that fits this post best.</p>
+                <button
+                  onClick={() => setTemplate('auto')}
+                  className={`w-full text-left p-3.5 rounded-xl border transition-all ${
+                    template === 'auto' ? 'bg-indigo-500/10 border-indigo-500' : 'bg-slate-950/40 border-slate-850 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="font-bold text-sm text-white">✨ Auto — let AI pick for me</div>
+                  <div className="text-xs text-slate-400 mt-0.5">Gemini reads the topic and chooses the best-fitting template below.</div>
+                </button>
+                {TEMPLATE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setTemplate(opt.id)}
+                    className={`w-full text-left p-3.5 rounded-xl border transition-all ${
+                      template === opt.id ? 'bg-indigo-500/10 border-indigo-500' : 'bg-slate-950/40 border-slate-850 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="font-bold text-sm text-white">{opt.name}</div>
+                    <div className="text-xs text-slate-400 mt-0.5">{opt.description}</div>
+                    <div className="text-[10px] text-indigo-400 mt-1 font-semibold uppercase tracking-wide">Best for: {opt.bestFor}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {step === 3 && (
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-2">Tone of voice</label>
+                  <div className="grid grid-cols-1 gap-2">
+                    {TONE_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        onClick={() => setTone(opt.id)}
+                        className={`text-left px-3.5 py-2.5 rounded-lg border text-sm transition-all ${
+                          tone === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <span className="font-bold">{opt.label}</span>
+                        <span className="text-xs text-slate-400 ml-2">{opt.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-2">Target length</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {LENGTH_OPTIONS.map((opt) => (
+                      <button
+                        key={opt.id}
+                        onClick={() => setLength(opt.id)}
+                        className={`px-3 py-2.5 rounded-lg border text-xs font-bold transition-all ${
+                          length === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 4 && (
+              <div className="space-y-4">
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Featured image</label>
+                <div className="space-y-2">
+                  {[
+                    { id: 'ai' as ImageStrategy, label: 'AI-generated image (Gemini)', desc: 'Generates a real, on-topic image. Costs more & takes longer than text.' },
+                    { id: 'placeholder' as ImageStrategy, label: 'Smart placeholder', desc: 'Free, instant, no API key — swap it out anytime by pasting a URL.' },
+                    { id: 'suggest' as ImageStrategy, label: 'AI suggests, I\'ll paste a URL', desc: 'Gemini gives you a search query + alt text; you find the image yourself.' },
+                    { id: 'none' as ImageStrategy, label: 'No image', desc: 'Skip the featured image entirely.' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => setImageStrategy(opt.id)}
+                      className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-sm transition-all flex items-start gap-2 ${
+                        imageStrategy === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <ImageIcon className="h-4 w-4 mt-0.5 shrink-0 text-indigo-400" />
+                      <span>
+                        <span className="font-bold block">{opt.label}</span>
+                        <span className="text-xs text-slate-400">{opt.desc}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {imageStrategy === 'ai' && (
+                  <div className="pt-2 border-t border-slate-800/80">
+                    <label className="flex items-center gap-2 cursor-pointer select-none mb-2">
+                      <input
+                        type="checkbox"
+                        checked={includeInlineImages}
+                        onChange={(e) => setIncludeInlineImages(e.target.checked)}
+                        className="h-4 w-4 accent-indigo-600 rounded bg-slate-950 border border-slate-800"
+                      />
+                      <span className="text-sm font-semibold text-slate-200">Also add inline images inside the article body</span>
+                    </label>
+                    {includeInlineImages && (
+                      <div className="flex gap-2 ml-6">
+                        {[1, 2].map((n) => (
+                          <button
+                            key={n}
+                            onClick={() => setInlineImageCount(n as 1 | 2)}
+                            className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
+                              inlineImageCount === n ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300'
+                            }`}
+                          >
+                            {n} image{n > 1 ? 's' : ''}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center pt-6 mt-2 border-t border-slate-800/80">
+              <button
+                onClick={() => (step === 1 ? onClose() : setStep(step - 1))}
+                className="flex items-center gap-1 px-4 py-2 rounded-lg text-xs font-bold text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                {step === 1 ? 'Cancel' : 'Back'}
+              </button>
+
+              {step < 4 ? (
+                <button
+                  onClick={() => canGoNext && setStep(step + 1)}
+                  disabled={!canGoNext}
+                  className="flex items-center gap-1 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs transition-colors"
+                >
+                  Next
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              ) : (
+                <button
+                  onClick={handleGenerate}
+                  className="flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Generate Blog Post
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

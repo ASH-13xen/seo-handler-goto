@@ -67,6 +67,7 @@ model Blog {
   published      Boolean    @default(false)
   category       String?
   tags           String?    // Comma-separated values
+  template       String?    // Which AI blog template generated this post (classic, listicle, howto, comparison, news)
   publishedAt    DateTime   @default(now())
   
   // Custom SEO Overrides for Blog
