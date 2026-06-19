@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/refs */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable react/no-unescaped-entities */
 /* eslint-disable react-hooks/immutability */
@@ -180,7 +181,7 @@ export default function Dashboard() {
   const [historyCounter, setHistoryCounter] = useState<number>(0);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const savedRangeRef = useRef<Range | null>(null);
-  
+
   // Undo/Redo history stack
   const undoStackRef = useRef<string[]>([]);
   const redoStackRef = useRef<string[]>([]);
@@ -873,7 +874,10 @@ export default function Dashboard() {
 
   const placeCaretAtEnd = (el: HTMLElement) => {
     el.focus();
-    if (typeof window.getSelection !== "undefined" && typeof document.createRange !== "undefined") {
+    if (
+      typeof window.getSelection !== "undefined" &&
+      typeof document.createRange !== "undefined"
+    ) {
       const range = document.createRange();
       range.selectNodeContents(el);
       range.collapse(false);
@@ -925,7 +929,15 @@ export default function Dashboard() {
     syncEditorContent();
   };
 
-  const handleTabChange = (tabName: "overview" | "metadata" | "blogs" | "redirects" | "trackers" | "leads") => {
+  const handleTabChange = (
+    tabName:
+      | "overview"
+      | "metadata"
+      | "blogs"
+      | "redirects"
+      | "trackers"
+      | "leads",
+  ) => {
     if (activeTab === "blogs") {
       confirmDiscardIfDirty(() => setActiveTab(tabName));
     } else {
@@ -935,7 +947,10 @@ export default function Dashboard() {
 
   const handleEditorPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
-    if (target.tagName === "IMG" && target.classList.contains("editable-blog-image")) {
+    if (
+      target.tagName === "IMG" &&
+      target.classList.contains("editable-blog-image")
+    ) {
       e.preventDefault();
       dragImageRef.current = target as HTMLImageElement;
       dragStartPosRef.current = { x: e.clientX, y: e.clientY };
@@ -959,7 +974,10 @@ export default function Dashboard() {
       if (document.caretRangeFromPoint) {
         range = document.caretRangeFromPoint(e.clientX, e.clientY);
       } else if ((document as any).caretPositionFromPoint) {
-        const pos = (document as any).caretPositionFromPoint(e.clientX, e.clientY);
+        const pos = (document as any).caretPositionFromPoint(
+          e.clientX,
+          e.clientY,
+        );
         if (pos) {
           range = document.createRange();
           range.setStart(pos.offsetNode, pos.offset);
@@ -985,9 +1003,13 @@ export default function Dashboard() {
 
     if (isDraggingRef.current && targetRangeRef.current && editorRef.current) {
       takeSnapshot();
-      
+
       const sibling = dragImageRef.current.nextSibling;
-      if (sibling && sibling.nodeType === Node.TEXT_NODE && sibling.textContent === "\u00A0") {
+      if (
+        sibling &&
+        sibling.nodeType === Node.TEXT_NODE &&
+        sibling.textContent === "\u00A0"
+      ) {
         sibling.remove();
       }
       dragImageRef.current.remove();
@@ -1032,7 +1054,7 @@ export default function Dashboard() {
     styleName: "fontSize" | "fontFamily" | "color",
     value: string,
     range: Range,
-    sel: Selection
+    sel: Selection,
   ) => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -1040,7 +1062,10 @@ export default function Dashboard() {
     let parentSpan: HTMLSpanElement | null = null;
     let node: Node | null = range.startContainer;
     while (node && node !== editor) {
-      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "SPAN") {
+      if (
+        node.nodeType === Node.ELEMENT_NODE &&
+        (node as HTMLElement).tagName === "SPAN"
+      ) {
         const text = node.textContent || "";
         if (text === "" || text === "\u200B") {
           parentSpan = node as HTMLSpanElement;
@@ -1303,7 +1328,11 @@ export default function Dashboard() {
     if (!selectedEditorImage) return;
     takeSnapshot();
     const sibling = selectedEditorImage.nextSibling;
-    if (sibling && sibling.nodeType === Node.TEXT_NODE && sibling.textContent === "\u00A0") {
+    if (
+      sibling &&
+      sibling.nodeType === Node.TEXT_NODE &&
+      sibling.textContent === "\u00A0"
+    ) {
       sibling.remove();
     }
     selectedEditorImage.remove();
@@ -1314,7 +1343,10 @@ export default function Dashboard() {
   const editEditorImageAlt = () => {
     if (!selectedEditorImage) return;
     const currentAlt = selectedEditorImage.alt || "";
-    const newAlt = window.prompt("Descriptive image alt text (for SEO/Accessibility):", currentAlt);
+    const newAlt = window.prompt(
+      "Descriptive image alt text (for SEO/Accessibility):",
+      currentAlt,
+    );
     if (newAlt !== null) {
       takeSnapshot();
       selectedEditorImage.alt = newAlt.trim();
@@ -1369,8 +1401,15 @@ export default function Dashboard() {
     const editor = editorRef.current;
     if (!editor) return;
 
-    const altText = window.prompt("Descriptive image alt text (for SEO/Accessibility):") || "";
-    const cleanAlt = altText.trim() || defaultAlt.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").trim();
+    const altText =
+      window.prompt("Descriptive image alt text (for SEO/Accessibility):") ||
+      "";
+    const cleanAlt =
+      altText.trim() ||
+      defaultAlt
+        .replace(/\.[^/.]+$/, "")
+        .replace(/[-_]/g, " ")
+        .trim();
 
     takeSnapshot();
     editor.focus();
@@ -2436,7 +2475,11 @@ export default function Dashboard() {
                             </button>
                           </div>
                         </div>
-                        <div className={contentViewMode === "raw" ? "block" : "hidden"}>
+                        <div
+                          className={
+                            contentViewMode === "raw" ? "block" : "hidden"
+                          }
+                        >
                           <textarea
                             rows={15}
                             required
@@ -2448,7 +2491,11 @@ export default function Dashboard() {
                             className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500 font-mono"
                           />
                         </div>
-                        <div className={contentViewMode === "preview" ? "block" : "hidden"}>
+                        <div
+                          className={
+                            contentViewMode === "preview" ? "block" : "hidden"
+                          }
+                        >
                           {(() => {
                             const editorContent = (
                               <div className="rounded-lg border border-slate-850 bg-white overflow-hidden flex flex-col">
@@ -2505,7 +2552,10 @@ export default function Dashboard() {
                                     title="Underline (Ctrl+U)"
                                     onClick={() =>
                                       withEditorSelection(() =>
-                                        document.execCommand("underline", false),
+                                        document.execCommand(
+                                          "underline",
+                                          false,
+                                        ),
                                       )
                                     }
                                     className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors underline text-xs shadow-sm"
@@ -2638,7 +2688,10 @@ export default function Dashboard() {
                                     title="Align Left"
                                     onClick={() =>
                                       withEditorSelection(() =>
-                                        document.execCommand("justifyLeft", false),
+                                        document.execCommand(
+                                          "justifyLeft",
+                                          false,
+                                        ),
                                       )
                                     }
                                     className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
@@ -2691,12 +2744,24 @@ export default function Dashboard() {
                                     className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[90px]"
                                   >
                                     <option value="">Font</option>
-                                    <option value="Outfit, sans-serif">Outfit</option>
-                                    <option value="Arial, sans-serif">Arial</option>
-                                    <option value="Georgia, serif">Georgia</option>
-                                    <option value="'Times New Roman', serif">Times New Roman</option>
-                                    <option value="Verdana, sans-serif">Verdana</option>
-                                    <option value="'Courier New', monospace">Courier New</option>
+                                    <option value="Outfit, sans-serif">
+                                      Outfit
+                                    </option>
+                                    <option value="Arial, sans-serif">
+                                      Arial
+                                    </option>
+                                    <option value="Georgia, serif">
+                                      Georgia
+                                    </option>
+                                    <option value="'Times New Roman', serif">
+                                      Times New Roman
+                                    </option>
+                                    <option value="Verdana, sans-serif">
+                                      Verdana
+                                    </option>
+                                    <option value="'Courier New', monospace">
+                                      Courier New
+                                    </option>
                                   </select>
 
                                   {/* Font size */}
@@ -2768,13 +2833,19 @@ export default function Dashboard() {
                                           selectedSite || "general",
                                         );
                                         try {
-                                          const res = await fetch("/api/upload", {
-                                            method: "POST",
-                                            body: formData,
-                                          });
+                                          const res = await fetch(
+                                            "/api/upload",
+                                            {
+                                              method: "POST",
+                                              body: formData,
+                                            },
+                                          );
                                           if (res.ok) {
                                             const json = await res.json();
-                                            insertEditorImage(json.url, file.name);
+                                            insertEditorImage(
+                                              json.url,
+                                              file.name,
+                                            );
                                           } else {
                                             alert("Failed to upload image.");
                                           }
@@ -2830,7 +2901,9 @@ export default function Dashboard() {
                                         <button
                                           key={pct}
                                           type="button"
-                                          onClick={() => applyEditorImageWidth(pct)}
+                                          onClick={() =>
+                                            applyEditorImageWidth(pct)
+                                          }
                                           className={`px-2 py-1 rounded border font-bold transition-colors ${
                                             getEditorImageWidth(
                                               selectedEditorImage,
@@ -2893,7 +2966,8 @@ export default function Dashboard() {
                                   onBlur={(e) => {
                                     if (selectedEditorImage) {
                                       selectedEditorImage.style.outline = "";
-                                      selectedEditorImage.style.outlineOffset = "";
+                                      selectedEditorImage.style.outlineOffset =
+                                        "";
                                     }
                                     const html = e.currentTarget.innerHTML;
                                     updateBlogForm({ content: html });
@@ -2924,7 +2998,9 @@ export default function Dashboard() {
                                   onClick={(e) => {
                                     const target = e.target as HTMLElement;
                                     if (target.tagName === "IMG") {
-                                      selectEditorImage(target as HTMLImageElement);
+                                      selectEditorImage(
+                                        target as HTMLImageElement,
+                                      );
                                     } else {
                                       deselectEditorImage();
                                     }
@@ -2934,8 +3010,8 @@ export default function Dashboard() {
                                 {/* Editor Tips Footer */}
                                 <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none shrink-0">
                                   <span>
-                                    💡 Click an image to align/resize it, or drag
-                                    it to reposition anywhere in the post.
+                                    💡 Click an image to align/resize it, or
+                                    drag it to reposition anywhere in the post.
                                   </span>
                                   <span className="font-bold text-indigo-600">
                                     Visual Editor Active
