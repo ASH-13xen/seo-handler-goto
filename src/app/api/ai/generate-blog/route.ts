@@ -10,7 +10,7 @@ import {
   LengthId,
 } from '@/lib/blogTemplates';
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash-lite';
 const VALID_TEMPLATE_IDS = TEMPLATE_OPTIONS.map(t => t.id);
 
 async function callGemini(apiKey: string, systemInstruction: string, userPrompt: string, responseSchema: object) {

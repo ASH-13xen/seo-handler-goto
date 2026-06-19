@@ -36,7 +36,7 @@ interface BlogAIWizardProps {
   onGenerated: (result: BlogAIWizardResult) => void;
 }
 
-const STEP_LABELS = ['Topic', 'Template', 'Tone & Length', 'Images'];
+const STEP_LABELS = ['Topic', 'Template', 'Tone & Length'];
 
 export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWizardProps) {
   const [step, setStep] = useState(1);
@@ -47,39 +47,12 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
   const [template, setTemplate] = useState<TemplateId | 'auto'>('auto');
   const [tone, setTone] = useState<ToneId>('professional');
   const [length, setLength] = useState<LengthId>('medium');
-  const [imageStrategy, setImageStrategy] = useState<ImageStrategy>('placeholder');
-  const [aspectRatio, setAspectRatio] = useState<'16:9' | '1:1' | '4:3' | '9:16'>('16:9');
-  const [imageStyle, setImageStyle] = useState<'photo' | 'illustration' | 'vector' | '3d'>('photo');
-  const [includeInlineImages, setIncludeInlineImages] = useState(false);
-  const [inlineImageCount, setInlineImageCount] = useState<1 | 2>(1);
 
   const [generating, setGenerating] = useState(false);
   const [progressLabel, setProgressLabel] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const canGoNext = step === 1 ? topic.trim().length > 0 : true;
-
-  function getSlotList(data: GeneratedBlogContent): { image?: InlineImage }[] | null {
-    if (data.template === 'classic' || data.template === 'news') return data.sections;
-    if (data.template === 'listicle') return data.items;
-    if (data.template === 'howto') return data.steps;
-    return null;
-  }
-
-  async function generateImage(prompt: string, slugForFile: string): Promise<string | null> {
-    try {
-      const res = await fetch('/api/ai/generate-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, siteId, slug: slugForFile, aspectRatio, imageStyle }),
-      });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.url || null;
-    } catch {
-      return null;
-    }
-  }
 
   async function handleGenerate() {
     setGenerating(true);
@@ -97,34 +70,8 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
       }
       const data: GeneratedBlogContent = json.data;
 
-      let featuredImage = '';
-      let imageSuggestion: { query: string; alt: string } | undefined;
-
-      if (imageStrategy === 'ai') {
-        setProgressLabel('Generating hero image...');
-        const heroUrl = await generateImage(`${data.heroImageQuery}. Alt text context: ${data.heroImageAlt}`, `${data.slug}-hero`);
-        featuredImage = heroUrl || `https://picsum.photos/seed/${data.slug}/1600/900`;
-
-        if (includeInlineImages) {
-          const slots = getSlotList(data);
-          if (slots && slots.length > 0) {
-            const count = Math.min(inlineImageCount, slots.length);
-            for (let i = 0; i < count; i++) {
-              setProgressLabel(`Generating inline image ${i + 1} of ${count}...`);
-              const slotTitle =
-                (slots[i] as any).heading || (slots[i] as any).title || data.heroImageQuery;
-              const url = await generateImage(`Context for this section: ${slotTitle}. Overall article topic: ${topic}.`, `${data.slug}-inline-${i + 1}`);
-              if (url) {
-                slots[i].image = { url, alt: slotTitle };
-              }
-            }
-          }
-        }
-      } else if (imageStrategy === 'placeholder') {
-        featuredImage = `https://picsum.photos/seed/${data.slug}/1600/900`;
-      } else if (imageStrategy === 'suggest') {
-        imageSuggestion = { query: data.heroImageQuery, alt: data.heroImageAlt };
-      }
+      const featuredImage = '';
+      const imageSuggestion = undefined;
 
       setProgressLabel('Rendering template...');
       const content = renderBlogHtml(data);
@@ -184,7 +131,7 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
           <div className="flex flex-col items-center justify-center py-16 gap-4">
             <Loader className="h-8 w-8 animate-spin text-indigo-400" />
             <p className="text-sm text-slate-300 font-semibold">{progressLabel}</p>
-            <p className="text-xs text-slate-500">This can take up to a minute, especially with images.</p>
+            <p className="text-xs text-slate-500">This can take up to a minute.</p>
           </div>
         ) : (
           <>
@@ -301,113 +248,6 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
               </div>
             )}
 
-            {step === 4 && (
-              <div className="space-y-4">
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Featured image</label>
-                <div className="space-y-2">
-                  {[
-                    { id: 'ai' as ImageStrategy, label: 'AI-generated image (Gemini)', desc: 'Generates a real, on-topic image. Costs more & takes longer than text.' },
-                    { id: 'placeholder' as ImageStrategy, label: 'Smart placeholder', desc: 'Free, instant, no API key — swap it out anytime by pasting a URL.' },
-                    { id: 'suggest' as ImageStrategy, label: 'AI suggests, I\'ll paste a URL', desc: 'Gemini gives you a search query + alt text; you find the image yourself.' },
-                    { id: 'none' as ImageStrategy, label: 'No image', desc: 'Skip the featured image entirely.' },
-                  ].map((opt) => (
-                    <button
-                      key={opt.id}
-                      onClick={() => setImageStrategy(opt.id)}
-                      className={`w-full text-left px-3.5 py-2.5 rounded-lg border text-sm transition-all flex items-start gap-2 ${
-                        imageStrategy === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <ImageIcon className="h-4 w-4 mt-0.5 shrink-0 text-indigo-400" />
-                      <span>
-                        <span className="font-bold block">{opt.label}</span>
-                        <span className="text-xs text-slate-400">{opt.desc}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-
-                {imageStrategy === 'ai' && (
-                  <div className="space-y-4 pt-3 border-t border-slate-800/80">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 mb-1.5">Aspect ratio (Size)</label>
-                        <div className="grid grid-cols-2 gap-1.5">
-                          {[
-                            { id: '16:9', label: 'Widescreen (16:9)' },
-                            { id: '1:1', label: 'Square (1:1)' },
-                            { id: '4:3', label: 'Classic (4:3)' },
-                            { id: '9:16', label: 'Vertical (9:16)' },
-                          ].map((opt) => (
-                            <button
-                              key={opt.id}
-                              type="button"
-                              onClick={() => setAspectRatio(opt.id as any)}
-                              className={`px-2 py-2 rounded-lg border text-[11px] font-bold text-center transition-all ${
-                                aspectRatio === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-400 hover:border-slate-700'
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 mb-1.5">Artistic style</label>
-                        <div className="grid grid-cols-2 gap-1.5">
-                          {[
-                            { id: 'photo', label: 'Photo' },
-                            { id: 'illustration', label: 'Illustration' },
-                            { id: 'vector', label: 'Vector' },
-                            { id: '3d', label: '3D Render' },
-                          ].map((opt) => (
-                            <button
-                              key={opt.id}
-                              type="button"
-                              onClick={() => setImageStyle(opt.id as any)}
-                              className={`px-2 py-2 rounded-lg border text-[11px] font-bold text-center transition-all ${
-                                imageStyle === opt.id ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-400 hover:border-slate-700'
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-slate-800/80">
-                      <label className="flex items-center gap-2 cursor-pointer select-none mb-2">
-                        <input
-                          type="checkbox"
-                          checked={includeInlineImages}
-                          onChange={(e) => setIncludeInlineImages(e.target.checked)}
-                          className="h-4 w-4 accent-indigo-600 rounded bg-slate-950 border border-slate-800"
-                        />
-                        <span className="text-sm font-semibold text-slate-200">Also add inline images inside the article body</span>
-                      </label>
-                      {includeInlineImages && (
-                        <div className="flex gap-2 ml-6">
-                          {[1, 2].map((n) => (
-                            <button
-                              key={n}
-                              type="button"
-                              onClick={() => setInlineImageCount(n as 1 | 2)}
-                              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
-                                inlineImageCount === n ? 'bg-indigo-500/10 border-indigo-500 text-white' : 'bg-slate-950/40 border-slate-850 text-slate-300'
-                              }`}
-                            >
-                              {n} image{n > 1 ? 's' : ''}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
             <div className="flex justify-between items-center pt-6 mt-2 border-t border-slate-800/80">
               <button
                 onClick={() => (step === 1 ? onClose() : setStep(step - 1))}
@@ -417,7 +257,7 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
                 {step === 1 ? 'Cancel' : 'Back'}
               </button>
 
-              {step < 4 ? (
+              {step < 3 ? (
                 <button
                   onClick={() => canGoNext && setStep(step + 1)}
                   disabled={!canGoNext}
@@ -442,3 +282,4 @@ export default function BlogAIWizard({ siteId, onClose, onGenerated }: BlogAIWiz
     </div>
   );
 }
+
