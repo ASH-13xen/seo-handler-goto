@@ -25,6 +25,13 @@ import {
   TrendingUp,
   Code2,
   Upload,
+  Maximize2,
+  Minimize2,
+  Link as LinkIcon,
+  Strikethrough,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
 } from "lucide-react";
 import BlogAIWizard, { BlogAIWizardResult } from "@/components/BlogAIWizard";
 
@@ -167,6 +174,8 @@ export default function Dashboard() {
   );
   const [selectedEditorImage, setSelectedEditorImage] =
     useState<HTMLImageElement | null>(null);
+  const [isEditorFullscreen, setIsEditorFullscreen] =
+    useState<boolean>(false);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const savedRangeRef = useRef<Range | null>(null);
 
@@ -272,6 +281,14 @@ export default function Dashboard() {
   useEffect(() => {
     fetchStats();
   }, []);
+
+  // Lock page scroll while the visual editor is in full-screen mode
+  useEffect(() => {
+    document.body.style.overflow = isEditorFullscreen ? "hidden" : "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [isEditorFullscreen]);
 
   // Fetch site-specific data when site or tab changes
   useEffect(() => {
@@ -690,6 +707,7 @@ export default function Dashboard() {
     });
     setContentViewMode("raw");
     setSelectedEditorImage(null);
+    setIsEditorFullscreen(false);
     savedRangeRef.current = null;
   };
 
@@ -712,6 +730,7 @@ export default function Dashboard() {
     });
     setContentViewMode("preview");
     setSelectedEditorImage(null);
+    setIsEditorFullscreen(false);
     savedRangeRef.current = null;
     setShowAiWizard(false);
     setBlogMessage({
@@ -740,6 +759,7 @@ export default function Dashboard() {
     });
     setContentViewMode("raw");
     setSelectedEditorImage(null);
+    setIsEditorFullscreen(false);
     savedRangeRef.current = null;
     setAiPrompt(blog.title); // Pre-fill AI prompt with blog title
   };
@@ -756,6 +776,30 @@ export default function Dashboard() {
     ) {
       savedRangeRef.current = sel.getRangeAt(0).cloneRange();
     }
+  };
+
+  // Every toolbar control lives outside the contentEditable, so clicking it
+  // moves DOM focus away first. For simple buttons the browser usually keeps
+  // the text selection alive, but native pickers (file input, <input
+  // type="color">) hand off to an OS-level surface that can clear it
+  // entirely. Restoring the last known-good range before running the
+  // formatting command makes every toolbar action work regardless of which
+  // case actually triggered it.
+  const withEditorSelection = (action: () => void) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (
+      savedRangeRef.current &&
+      editor.contains(savedRangeRef.current.startContainer)
+    ) {
+      sel?.removeAllRanges();
+      sel?.addRange(savedRangeRef.current);
+    }
+    action();
+    saveEditorSelection();
+    syncEditorContent();
   };
 
   const getEditorImageAlign = (
@@ -865,6 +909,8 @@ export default function Dashboard() {
     img.src = url;
     img.alt = alt;
     img.className = "editable-blog-image";
+    img.draggable = true;
+    img.style.cursor = "grab";
     restyleEditorImage(img, "center", 60);
 
     range.deleteContents();
@@ -887,6 +933,44 @@ export default function Dashboard() {
 
     syncEditorContent();
     selectEditorImage(img);
+  };
+
+  // Sync content after a native drag-and-drop reposition of an image inside
+  // the editor (execCommand-style "input" events aren't guaranteed to fire
+  // for drag operations in every browser, so we sync explicitly).
+  const handleEditorDrop = () => {
+    setTimeout(() => syncEditorContent(), 0);
+  };
+
+  // document.execCommand('fontSize') only supports legacy sizes 1-7 via
+  // a deprecated <font> tag. We let it mark the selection, then swap the
+  // <font size="7"> wrapper for a normal span with a real pixel size.
+  const applyEditorFontSize = (px: string) => {
+    withEditorSelection(() => {
+      document.execCommand("fontSize", false, "7");
+      const editor = editorRef.current;
+      if (editor) {
+        editor.querySelectorAll('font[size="7"]').forEach((el) => {
+          const span = document.createElement("span");
+          span.style.fontSize = px;
+          span.innerHTML = el.innerHTML;
+          el.replaceWith(span);
+        });
+      }
+    });
+  };
+
+  const applyEditorLink = () => {
+    // Capture the selection BEFORE prompt() runs — some browsers treat the
+    // dialog as enough of a context switch to clear it otherwise.
+    saveEditorSelection();
+    const url = window.prompt(
+      "Link URL (e.g. https://example.com):",
+      "https://",
+    );
+    if (url) {
+      withEditorSelection(() => document.execCommand("createLink", false, url));
+    }
   };
 
   return (
@@ -1822,6 +1906,16 @@ export default function Dashboard() {
                               <Eye className="h-3 w-3" />
                               Visual Editor
                             </button>
+                            {contentViewMode === "preview" && (
+                              <button
+                                type="button"
+                                onClick={() => setIsEditorFullscreen(true)}
+                                title="Full screen editing"
+                                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold text-slate-400 hover:text-slate-200 transition-colors"
+                              >
+                                <Maximize2 className="h-3 w-3" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         {contentViewMode === "raw" ? (
@@ -1839,15 +1933,38 @@ export default function Dashboard() {
                             className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500 font-mono"
                           />
                         ) : (
-                          <div className="rounded-lg border border-slate-850 bg-white overflow-hidden flex flex-col">
+                          <div
+                            className={
+                              isEditorFullscreen
+                                ? "fixed inset-0 z-[70] bg-white flex flex-col"
+                                : "rounded-lg border border-slate-850 bg-white overflow-hidden flex flex-col"
+                            }
+                          >
+                            {isEditorFullscreen && (
+                              <div className="bg-indigo-600 px-4 py-2 flex items-center justify-between text-white shrink-0">
+                                <span className="text-xs font-bold">
+                                  Full Screen Editor
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsEditorFullscreen(false)}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-bold transition-colors"
+                                >
+                                  <Minimize2 className="h-3.5 w-3.5" />
+                                  Exit Full Screen
+                                </button>
+                              </div>
+                            )}
                             {/* Visual Editor Toolbar */}
-                            <div className="bg-slate-100 border-b border-slate-200 px-3 py-2 flex flex-wrap gap-1.5 items-center select-none">
+                            <div className="bg-slate-100 border-b border-slate-200 px-3 py-2 flex flex-wrap gap-1.5 items-center select-none shrink-0">
                               {/* Bold, Italic, Underline */}
                               <button
                                 type="button"
                                 title="Bold (Ctrl+B)"
                                 onClick={() =>
-                                  document.execCommand("bold", false)
+                                  withEditorSelection(() =>
+                                    document.execCommand("bold", false),
+                                  )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors font-bold text-xs shadow-sm"
                               >
@@ -1857,7 +1974,9 @@ export default function Dashboard() {
                                 type="button"
                                 title="Italic (Ctrl+I)"
                                 onClick={() =>
-                                  document.execCommand("italic", false)
+                                  withEditorSelection(() =>
+                                    document.execCommand("italic", false),
+                                  )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors italic text-xs shadow-sm"
                               >
@@ -1867,7 +1986,9 @@ export default function Dashboard() {
                                 type="button"
                                 title="Underline (Ctrl+U)"
                                 onClick={() =>
-                                  document.execCommand("underline", false)
+                                  withEditorSelection(() =>
+                                    document.execCommand("underline", false),
+                                  )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors underline text-xs shadow-sm"
                               >
@@ -1880,10 +2001,12 @@ export default function Dashboard() {
                                 type="button"
                                 title="Heading 2"
                                 onClick={() =>
-                                  document.execCommand(
-                                    "formatBlock",
-                                    false,
-                                    "H2",
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "formatBlock",
+                                      false,
+                                      "H2",
+                                    ),
                                   )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-black text-[10px] shadow-sm uppercase"
@@ -1894,10 +2017,12 @@ export default function Dashboard() {
                                 type="button"
                                 title="Heading 3"
                                 onClick={() =>
-                                  document.execCommand(
-                                    "formatBlock",
-                                    false,
-                                    "H3",
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "formatBlock",
+                                      false,
+                                      "H3",
+                                    ),
                                   )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-bold text-[10px] shadow-sm uppercase"
@@ -1908,10 +2033,12 @@ export default function Dashboard() {
                                 type="button"
                                 title="Normal Paragraph"
                                 onClick={() =>
-                                  document.execCommand(
-                                    "formatBlock",
-                                    false,
-                                    "P",
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "formatBlock",
+                                      false,
+                                      "P",
+                                    ),
                                   )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
@@ -1925,9 +2052,11 @@ export default function Dashboard() {
                                 type="button"
                                 title="Unordered List"
                                 onClick={() =>
-                                  document.execCommand(
-                                    "insertUnorderedList",
-                                    false,
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "insertUnorderedList",
+                                      false,
+                                    ),
                                   )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
@@ -1938,9 +2067,11 @@ export default function Dashboard() {
                                 type="button"
                                 title="Ordered List"
                                 onClick={() =>
-                                  document.execCommand(
-                                    "insertOrderedList",
-                                    false,
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "insertOrderedList",
+                                      false,
+                                    ),
                                   )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
@@ -1954,15 +2085,173 @@ export default function Dashboard() {
                                 type="button"
                                 title="Blockquote"
                                 onClick={() =>
-                                  document.execCommand(
-                                    "formatBlock",
-                                    false,
-                                    "BLOCKQUOTE",
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "formatBlock",
+                                      false,
+                                      "BLOCKQUOTE",
+                                    ),
                                   )
                                 }
                                 className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm italic font-semibold"
                               >
                                 Quote
+                              </button>
+                              <button
+                                type="button"
+                                title="Strikethrough"
+                                onClick={() =>
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "strikeThrough",
+                                      false,
+                                    ),
+                                  )
+                                }
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                              >
+                                <Strikethrough className="h-3 w-3" />
+                              </button>
+                              <div className="w-px h-5 bg-slate-300 mx-1" />
+
+                              {/* Alignment */}
+                              <button
+                                type="button"
+                                title="Align Left"
+                                onClick={() =>
+                                  withEditorSelection(() =>
+                                    document.execCommand("justifyLeft", false),
+                                  )
+                                }
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                              >
+                                <AlignLeft className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Align Center"
+                                onClick={() =>
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "justifyCenter",
+                                      false,
+                                    ),
+                                  )
+                                }
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                              >
+                                <AlignCenter className="h-3 w-3" />
+                              </button>
+                              <button
+                                type="button"
+                                title="Align Right"
+                                onClick={() =>
+                                  withEditorSelection(() =>
+                                    document.execCommand(
+                                      "justifyRight",
+                                      false,
+                                    ),
+                                  )
+                                }
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                              >
+                                <AlignRight className="h-3 w-3" />
+                              </button>
+                              <div className="w-px h-5 bg-slate-300 mx-1" />
+
+                              {/* Font family */}
+                              <select
+                                title="Font family"
+                                defaultValue=""
+                                onChange={(e) => {
+                                  const font = e.target.value;
+                                  if (font) {
+                                    withEditorSelection(() =>
+                                      document.execCommand(
+                                        "fontName",
+                                        false,
+                                        font,
+                                      ),
+                                    );
+                                  }
+                                  e.target.value = "";
+                                }}
+                                className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[90px]"
+                              >
+                                <option value="">Font</option>
+                                <option value="Outfit, sans-serif">
+                                  Outfit
+                                </option>
+                                <option value="Arial, sans-serif">
+                                  Arial
+                                </option>
+                                <option value="Georgia, serif">
+                                  Georgia
+                                </option>
+                                <option value="'Times New Roman', serif">
+                                  Times New Roman
+                                </option>
+                                <option value="Verdana, sans-serif">
+                                  Verdana
+                                </option>
+                                <option value="'Courier New', monospace">
+                                  Courier New
+                                </option>
+                              </select>
+
+                              {/* Font size */}
+                              <select
+                                title="Font size"
+                                defaultValue=""
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    applyEditorFontSize(e.target.value);
+                                  }
+                                  e.target.value = "";
+                                }}
+                                className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[70px]"
+                              >
+                                <option value="">Size</option>
+                                <option value="12px">12px</option>
+                                <option value="14px">14px</option>
+                                <option value="16px">16px</option>
+                                <option value="18px">18px</option>
+                                <option value="24px">24px</option>
+                                <option value="32px">32px</option>
+                                <option value="48px">48px</option>
+                              </select>
+
+                              {/* Text color */}
+                              <label
+                                title="Text color"
+                                className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm cursor-pointer flex items-center"
+                              >
+                                <input
+                                  type="color"
+                                  defaultValue="#1e293b"
+                                  className="h-3.5 w-3.5 cursor-pointer border-none p-0 bg-transparent"
+                                  onMouseDown={saveEditorSelection}
+                                  onChange={(e) => {
+                                    const color = e.target.value;
+                                    withEditorSelection(() =>
+                                      document.execCommand(
+                                        "foreColor",
+                                        false,
+                                        color,
+                                      ),
+                                    );
+                                  }}
+                                />
+                              </label>
+
+                              {/* Link */}
+                              <button
+                                type="button"
+                                title="Insert Link"
+                                onClick={applyEditorLink}
+                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                              >
+                                <LinkIcon className="h-3 w-3" />
                               </button>
                               <div className="w-px h-5 bg-slate-300 mx-1" />
 
@@ -2008,7 +2297,7 @@ export default function Dashboard() {
 
                             {/* Image alignment & size toolbar — shown when an image is selected */}
                             {selectedEditorImage && (
-                              <div className="bg-indigo-50 border-b border-indigo-200 px-3 py-2 flex flex-wrap items-center gap-2 text-[10px]">
+                              <div className="bg-indigo-50 border-b border-indigo-200 px-3 py-2 flex flex-wrap items-center gap-2 text-[10px] shrink-0">
                                 <span className="font-bold text-indigo-700">
                                   Image:
                                 </span>
@@ -2102,8 +2391,18 @@ export default function Dashboard() {
                               }}
                               onMouseUp={saveEditorSelection}
                               onKeyUp={saveEditorSelection}
-                              className="w-full h-[400px] overflow-y-auto bg-white text-slate-900 p-6 focus:outline-none blog-visual-editor-content prose max-w-none"
-                              style={{ minHeight: "350px" }}
+                              onDrop={handleEditorDrop}
+                              onDragEnd={handleEditorDrop}
+                              className={
+                                isEditorFullscreen
+                                  ? "w-full flex-1 overflow-y-auto bg-white text-slate-900 p-8 focus:outline-none blog-visual-editor-content prose max-w-3xl mx-auto"
+                                  : "w-full h-[400px] overflow-y-auto bg-white text-slate-900 p-6 focus:outline-none blog-visual-editor-content prose max-w-none"
+                              }
+                              style={
+                                isEditorFullscreen
+                                  ? undefined
+                                  : { minHeight: "350px" }
+                              }
                               ref={(el) => {
                                 editorRef.current = el;
                                 if (
@@ -2125,10 +2424,10 @@ export default function Dashboard() {
                             />
 
                             {/* Editor Tips Footer */}
-                            <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none">
+                            <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none shrink-0">
                               <span>
-                                💡 Click any image to align it left/center/right
-                                and pick a size.
+                                💡 Click an image to align/resize it, or drag
+                                it to reposition anywhere in the post.
                               </span>
                               <span className="font-bold text-indigo-600">
                                 Visual Editor Active
