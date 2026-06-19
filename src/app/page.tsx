@@ -32,6 +32,8 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
+  Undo,
+  Redo,
 } from "lucide-react";
 import BlogAIWizard, { BlogAIWizardResult } from "@/components/BlogAIWizard";
 
@@ -174,10 +176,26 @@ export default function Dashboard() {
   );
   const [selectedEditorImage, setSelectedEditorImage] =
     useState<HTMLImageElement | null>(null);
-  const [isEditorFullscreen, setIsEditorFullscreen] =
-    useState<boolean>(false);
+  const [blogFormDirty, setBlogFormDirty] = useState<boolean>(false);
+  const [historyCounter, setHistoryCounter] = useState<number>(0);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const savedRangeRef = useRef<Range | null>(null);
+  
+  // Undo/Redo history stack
+  const undoStackRef = useRef<string[]>([]);
+  const redoStackRef = useRef<string[]>([]);
+  const lastSnapshotRef = useRef<string>("");
+  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Manual slug flag
+  const slugManuallyEditedRef = useRef<boolean>(false);
+
+  // Pointer drag states for image repositioning
+  const dragImageRef = useRef<HTMLImageElement | null>(null);
+  const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const isDraggingRef = useRef<boolean>(false);
+  const dropIndicatorRef = useRef<HTMLDivElement | null>(null);
+  const targetRangeRef = useRef<Range | null>(null);
 
   // AI Assistant State
   const [aiPrompt, setAiPrompt] = useState<string>("");
@@ -282,20 +300,12 @@ export default function Dashboard() {
     fetchStats();
   }, []);
 
-  // Lock page scroll while the visual editor is in full-screen mode
-  useEffect(() => {
-    document.body.style.overflow = isEditorFullscreen ? "hidden" : "";
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [isEditorFullscreen]);
-
   // Fetch site-specific data when site or tab changes
   useEffect(() => {
     if (activeTab === "metadata") {
       fetchMetadata(metadataRoutePath);
     } else if (activeTab === "blogs") {
-      fetchBlogs();
+      fetchBlogs(false);
     } else if (activeTab === "redirects") {
       fetchRedirects();
     } else if (activeTab === "trackers") {
@@ -304,6 +314,33 @@ export default function Dashboard() {
       fetchLeads();
     }
   }, [selectedSite, activeTab]);
+
+  // Warn on browser reload/close if there is unsaved work
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (blogFormDirty) {
+        e.preventDefault();
+        e.returnValue = "You have unsaved changes. Discard them?";
+        return e.returnValue;
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [blogFormDirty]);
+
+  // Synchronize editor innerHTML when content mode changes or content is updated externally
+  useEffect(() => {
+    if (contentViewMode === "preview" && editorRef.current) {
+      if (
+        document.activeElement !== editorRef.current &&
+        editorRef.current.innerHTML !== (blogForm.content || "")
+      ) {
+        editorRef.current.innerHTML = blogForm.content || "";
+      }
+    }
+  }, [contentViewMode, blogForm.content]);
 
   // Fetch Global Stats
   const fetchStats = async () => {
@@ -356,11 +393,13 @@ export default function Dashboard() {
   };
 
   // Fetch Blogs
-  const fetchBlogs = async () => {
+  const fetchBlogs = async (shouldResetForm = false) => {
     setLoadingBlogs(true);
     setBlogMessage(null);
-    setSelectedBlog(null);
-    resetBlogForm();
+    if (shouldResetForm) {
+      setSelectedBlog(null);
+      resetBlogForm();
+    }
     try {
       const res = await fetch(
         `/api/blogs?siteId=${selectedSite}&publishedOnly=false`,
@@ -479,8 +518,31 @@ export default function Dashboard() {
   // Handle Blog Submit (Create or Update)
   const handleBlogSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoadingBlogs(true);
     setBlogMessage(null);
+
+    // Strip empty zero-width-space spans from content before saving
+    let sanitizedContent = blogForm.content || "";
+    if (typeof window !== "undefined") {
+      const tempDiv = document.createElement("div");
+      tempDiv.innerHTML = sanitizedContent;
+      tempDiv.querySelectorAll("span").forEach((span) => {
+        const text = span.textContent || "";
+        if (text === "" || text === "\u200B") {
+          span.remove();
+        }
+      });
+      sanitizedContent = tempDiv.innerHTML;
+    }
+
+    if (!sanitizedContent || !sanitizedContent.trim()) {
+      setBlogMessage({
+        type: "error",
+        text: "Content cannot be empty.",
+      });
+      return;
+    }
+
+    setLoadingBlogs(true);
     try {
       const method = selectedBlog ? "PUT" : "POST";
       const endpoint = selectedBlog
@@ -490,6 +552,7 @@ export default function Dashboard() {
       const payload = {
         siteId: selectedSite,
         ...blogForm,
+        content: sanitizedContent, // Use cleaned content
       };
 
       const res = await fetch(endpoint, {
@@ -499,14 +562,36 @@ export default function Dashboard() {
       });
 
       if (res.ok) {
+        const savedBlog = await res.json();
         setBlogMessage({
           type: "success",
           text: selectedBlog
             ? "Blog article updated successfully!"
             : "Blog article published successfully!",
         });
-        fetchBlogs(); // Reload blog list
-        fetchStats(); // Update dashboard counts
+        setBlogFormDirty(false); // Clean flag!
+        setSelectedBlog(savedBlog);
+        setBlogForm({
+          title: savedBlog.title || "",
+          slug: savedBlog.slug || "",
+          summary: savedBlog.summary || "",
+          content: savedBlog.content || "",
+          featuredImage: savedBlog.featuredImage || "",
+          published: savedBlog.published || false,
+          category: savedBlog.category || "",
+          tags: savedBlog.tags || "",
+          seoTitle: savedBlog.seoTitle || "",
+          seoDescription: savedBlog.seoDescription || "",
+          seoOgImage: savedBlog.seoOgImage || "",
+          template: savedBlog.template || "",
+        });
+        lastSnapshotRef.current = savedBlog.content || "";
+        undoStackRef.current = [];
+        redoStackRef.current = [];
+        slugManuallyEditedRef.current = false;
+
+        fetchBlogs(false); // Reload list without clearing form
+        fetchStats(); // Update stats
       } else {
         const err = await res.json();
         setBlogMessage({
@@ -534,8 +619,18 @@ export default function Dashboard() {
           type: "success",
           text: "Blog post deleted successfully.",
         });
-        fetchBlogs();
+        if (selectedBlog && selectedBlog.slug === slug) {
+          setSelectedBlog(null);
+          resetBlogForm();
+        }
+        fetchBlogs(false);
         fetchStats();
+      } else {
+        const err = await res.json();
+        setBlogMessage({
+          type: "error",
+          text: err.error || "Failed to delete blog post.",
+        });
       }
     } catch (err) {
       setBlogMessage({ type: "error", text: "Failed to delete blog." });
@@ -671,12 +766,319 @@ export default function Dashboard() {
   // Auto-generate slug from blog title
   const handleBlogTitleChange = (title: string) => {
     setBlogForm((prev) => {
+      if (slugManuallyEditedRef.current) {
+        return { ...prev, title };
+      }
       const slug = title
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/(^-|-$)/g, "");
       return { ...prev, title, slug };
     });
+    setBlogFormDirty(true);
+  };
+
+  // Helper to update blog form and mark dirty
+  const updateBlogForm = (fields: Partial<BlogPost>) => {
+    setBlogForm((prev) => ({
+      ...prev,
+      ...fields,
+    }));
+    setBlogFormDirty(true);
+  };
+
+  // Helper to prompt on unsaved changes
+  const confirmDiscardIfDirty = (action: () => void) => {
+    if (blogFormDirty) {
+      if (!window.confirm("You have unsaved changes. Discard them?")) {
+        return;
+      }
+    }
+    action();
+  };
+
+  // Site change selector handler
+  const handleSiteChange = (siteId: string) => {
+    confirmDiscardIfDirty(() => {
+      setSelectedSite(siteId);
+      setSelectedBlog(null);
+      resetBlogForm();
+    });
+  };
+
+  // Undo/Redo snapshot operations
+  const takeSnapshot = () => {
+    const currentHTML = editorRef.current?.innerHTML || "";
+    if (currentHTML === lastSnapshotRef.current) return;
+
+    undoStackRef.current.push(lastSnapshotRef.current);
+    if (undoStackRef.current.length > 50) {
+      undoStackRef.current.shift();
+    }
+    redoStackRef.current = [];
+    lastSnapshotRef.current = currentHTML;
+    setHistoryCounter((c) => c + 1);
+  };
+
+  const handleTypingActivity = () => {
+    if (typingTimerRef.current) {
+      clearTimeout(typingTimerRef.current);
+    }
+    typingTimerRef.current = setTimeout(() => {
+      takeSnapshot();
+    }, 500);
+  };
+
+  const handleUndo = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    if (typingTimerRef.current) {
+      clearTimeout(typingTimerRef.current);
+    }
+
+    const currentHTML = editor.innerHTML;
+    if (currentHTML !== lastSnapshotRef.current) {
+      undoStackRef.current.push(lastSnapshotRef.current);
+      lastSnapshotRef.current = currentHTML;
+    }
+
+    if (undoStackRef.current.length === 0) return;
+
+    const previousHTML = undoStackRef.current.pop()!;
+    redoStackRef.current.push(currentHTML);
+    lastSnapshotRef.current = previousHTML;
+
+    editor.innerHTML = previousHTML;
+    placeCaretAtEnd(editor);
+    setBlogForm((prev) => ({ ...prev, content: previousHTML }));
+    setBlogFormDirty(true);
+    setHistoryCounter((c) => c + 1);
+  };
+
+  const handleRedo = () => {
+    const editor = editorRef.current;
+    if (!editor || redoStackRef.current.length === 0) return;
+
+    const nextHTML = redoStackRef.current.pop()!;
+    undoStackRef.current.push(lastSnapshotRef.current);
+    lastSnapshotRef.current = nextHTML;
+
+    editor.innerHTML = nextHTML;
+    placeCaretAtEnd(editor);
+    setBlogForm((prev) => ({ ...prev, content: nextHTML }));
+    setBlogFormDirty(true);
+    setHistoryCounter((c) => c + 1);
+  };
+
+  const placeCaretAtEnd = (el: HTMLElement) => {
+    el.focus();
+    if (typeof window.getSelection !== "undefined" && typeof document.createRange !== "undefined") {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+      savedRangeRef.current = range.cloneRange();
+    }
+  };
+
+  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const isMod = e.ctrlKey || e.metaKey;
+    if (isMod) {
+      if (e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if (e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        handleRedo();
+      }
+    } else {
+      handleTypingActivity();
+    }
+    saveEditorSelection();
+  };
+
+  const handleEditorPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    takeSnapshot();
+    const text = e.clipboardData.getData("text/plain");
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    range.deleteContents();
+    const textNode = document.createTextNode(text);
+    range.insertNode(textNode);
+
+    const newRange = document.createRange();
+    newRange.setStartAfter(textNode);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+    savedRangeRef.current = newRange.cloneRange();
+
+    syncEditorContent();
+  };
+
+  const handleTabChange = (tabName: "overview" | "metadata" | "blogs" | "redirects" | "trackers" | "leads") => {
+    if (activeTab === "blogs") {
+      confirmDiscardIfDirty(() => setActiveTab(tabName));
+    } else {
+      setActiveTab(tabName);
+    }
+  };
+
+  const handleEditorPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.tagName === "IMG" && target.classList.contains("editable-blog-image")) {
+      e.preventDefault();
+      dragImageRef.current = target as HTMLImageElement;
+      dragStartPosRef.current = { x: e.clientX, y: e.clientY };
+      isDraggingRef.current = false;
+      target.setPointerCapture(e.pointerId);
+    }
+  };
+
+  const handleEditorPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragImageRef.current || !dragStartPosRef.current) return;
+    const dx = e.clientX - dragStartPosRef.current.x;
+    const dy = e.clientY - dragStartPosRef.current.y;
+    if (!isDraggingRef.current && Math.sqrt(dx * dx + dy * dy) > 5) {
+      isDraggingRef.current = true;
+      dragImageRef.current.style.opacity = "0.5";
+    }
+
+    if (isDraggingRef.current) {
+      e.preventDefault();
+      let range: Range | null = null;
+      if (document.caretRangeFromPoint) {
+        range = document.caretRangeFromPoint(e.clientX, e.clientY);
+      } else if ((document as any).caretPositionFromPoint) {
+        const pos = (document as any).caretPositionFromPoint(e.clientX, e.clientY);
+        if (pos) {
+          range = document.createRange();
+          range.setStart(pos.offsetNode, pos.offset);
+          range.collapse(true);
+        }
+      }
+
+      if (range && editorRef.current?.contains(range.startContainer)) {
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(range);
+          targetRangeRef.current = range;
+        }
+      }
+    }
+  };
+
+  const handleEditorPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragImageRef.current) return;
+    dragImageRef.current.releasePointerCapture(e.pointerId);
+    dragImageRef.current.style.opacity = "";
+
+    if (isDraggingRef.current && targetRangeRef.current && editorRef.current) {
+      takeSnapshot();
+      
+      const sibling = dragImageRef.current.nextSibling;
+      if (sibling && sibling.nodeType === Node.TEXT_NODE && sibling.textContent === "\u00A0") {
+        sibling.remove();
+      }
+      dragImageRef.current.remove();
+
+      targetRangeRef.current.insertNode(dragImageRef.current);
+      const anchor = document.createTextNode("\u00A0");
+      dragImageRef.current.after(anchor);
+
+      const newRange = document.createRange();
+      newRange.setStartAfter(anchor);
+      newRange.collapse(true);
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(newRange);
+      savedRangeRef.current = newRange.cloneRange();
+
+      syncEditorContent();
+    }
+
+    dragImageRef.current = null;
+    dragStartPosRef.current = null;
+    isDraggingRef.current = false;
+    targetRangeRef.current = null;
+  };
+
+  const handleEditorPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragImageRef.current) {
+      dragImageRef.current.releasePointerCapture(e.pointerId);
+      dragImageRef.current.style.opacity = "";
+    }
+    dragImageRef.current = null;
+    dragStartPosRef.current = null;
+    isDraggingRef.current = false;
+    targetRangeRef.current = null;
+  };
+
+  const handleEditorDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const applyCollapsedStyle = (
+    styleName: "fontSize" | "fontFamily" | "color",
+    value: string,
+    range: Range,
+    sel: Selection
+  ) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    let parentSpan: HTMLSpanElement | null = null;
+    let node: Node | null = range.startContainer;
+    while (node && node !== editor) {
+      if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "SPAN") {
+        const text = node.textContent || "";
+        if (text === "" || text === "\u200B") {
+          parentSpan = node as HTMLSpanElement;
+          break;
+        }
+      }
+      node = node.parentNode;
+    }
+
+    if (parentSpan) {
+      if (styleName === "fontSize") {
+        parentSpan.style.fontSize = value;
+      } else if (styleName === "fontFamily") {
+        parentSpan.style.fontFamily = value;
+      } else if (styleName === "color") {
+        parentSpan.style.color = value;
+      }
+      syncEditorContent();
+    } else {
+      const span = document.createElement("span");
+      if (styleName === "fontSize") {
+        span.style.fontSize = value;
+      } else if (styleName === "fontFamily") {
+        span.style.fontFamily = value;
+      } else if (styleName === "color") {
+        span.style.color = value;
+      }
+      span.innerHTML = "&#8203;"; // Zero-width space
+      range.insertNode(span);
+
+      const newRange = document.createRange();
+      newRange.setStart(span.firstChild!, 1);
+      newRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(newRange);
+      savedRangeRef.current = newRange.cloneRange();
+      syncEditorContent();
+    }
   };
 
   // Apply AI Meta Tags to Blog Form
@@ -687,6 +1089,7 @@ export default function Dashboard() {
         seoTitle: aiResult.data.title,
         seoDescription: aiResult.data.description,
       }));
+      setBlogFormDirty(true);
     }
   };
 
@@ -705,63 +1108,82 @@ export default function Dashboard() {
       seoOgImage: "",
       template: "",
     });
+    setBlogFormDirty(false);
+    slugManuallyEditedRef.current = false;
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    lastSnapshotRef.current = "";
     setContentViewMode("raw");
     setSelectedEditorImage(null);
-    setIsEditorFullscreen(false);
     savedRangeRef.current = null;
+    setHistoryCounter((c) => c + 1);
   };
 
   // Apply AI-generated blog (from the wizard) to the editor form
   const handleAiBlogGenerated = (result: BlogAIWizardResult) => {
-    setSelectedBlog(null);
-    setBlogForm({
-      title: result.title || "",
-      slug: result.slug || "",
-      summary: result.summary || "",
-      content: result.content || "",
-      featuredImage: result.featuredImage || "",
-      published: false,
-      category: result.category || "",
-      tags: result.tags || "",
-      seoTitle: result.seoTitle || "",
-      seoDescription: result.seoDescription || "",
-      seoOgImage: "",
-      template: result.template,
-    });
-    setContentViewMode("preview");
-    setSelectedEditorImage(null);
-    setIsEditorFullscreen(false);
-    savedRangeRef.current = null;
-    setShowAiWizard(false);
-    setBlogMessage({
-      type: "success",
-      text: result.imageSuggestion
-        ? `Draft generated! Suggested image search: "${result.imageSuggestion.query}" (alt text: "${result.imageSuggestion.alt}") — paste a URL into Featured Image above.`
-        : "Draft generated! Review and edit below, then publish whenever you're ready.",
+    confirmDiscardIfDirty(() => {
+      setSelectedBlog(null);
+      setBlogForm({
+        title: result.title || "",
+        slug: result.slug || "",
+        summary: result.summary || "",
+        content: result.content || "",
+        featuredImage: result.featuredImage || "",
+        published: false,
+        category: result.category || "",
+        tags: result.tags || "",
+        seoTitle: result.seoTitle || "",
+        seoDescription: result.seoDescription || "",
+        seoOgImage: "",
+        template: result.template,
+      });
+      setBlogFormDirty(false);
+      slugManuallyEditedRef.current = false;
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      lastSnapshotRef.current = result.content || "";
+      setContentViewMode("preview");
+      setSelectedEditorImage(null);
+      savedRangeRef.current = null;
+      setShowAiWizard(false);
+      setBlogMessage({
+        type: "success",
+        text: result.imageSuggestion
+          ? `Draft generated! Suggested image search: "${result.imageSuggestion.query}" (alt text: "${result.imageSuggestion.alt}") — paste a URL into Featured Image above.`
+          : "Draft generated! Review and edit below, then publish whenever you're ready.",
+      });
+      setHistoryCounter((c) => c + 1);
     });
   };
 
   const selectBlogForEdit = (blog: BlogPost) => {
-    setSelectedBlog(blog);
-    setBlogForm({
-      title: blog.title || "",
-      slug: blog.slug || "",
-      summary: blog.summary || "",
-      content: blog.content || "",
-      featuredImage: blog.featuredImage || "",
-      published: blog.published || false,
-      category: blog.category || "",
-      tags: blog.tags || "",
-      seoTitle: blog.seoTitle || "",
-      seoDescription: blog.seoDescription || "",
-      seoOgImage: blog.seoOgImage || "",
-      template: blog.template || "",
+    confirmDiscardIfDirty(() => {
+      setSelectedBlog(blog);
+      setBlogForm({
+        title: blog.title || "",
+        slug: blog.slug || "",
+        summary: blog.summary || "",
+        content: blog.content || "",
+        featuredImage: blog.featuredImage || "",
+        published: blog.published || false,
+        category: blog.category || "",
+        tags: blog.tags || "",
+        seoTitle: blog.seoTitle || "",
+        seoDescription: blog.seoDescription || "",
+        seoOgImage: blog.seoOgImage || "",
+        template: blog.template || "",
+      });
+      setBlogFormDirty(false);
+      slugManuallyEditedRef.current = false;
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      lastSnapshotRef.current = blog.content || "";
+      setContentViewMode("raw");
+      setSelectedEditorImage(null);
+      savedRangeRef.current = null;
+      setAiPrompt(blog.title || "");
+      setHistoryCounter((c) => c + 1);
     });
-    setContentViewMode("raw");
-    setSelectedEditorImage(null);
-    setIsEditorFullscreen(false);
-    savedRangeRef.current = null;
-    setAiPrompt(blog.title); // Pre-fill AI prompt with blog title
   };
 
   // Save the editor's current cursor/selection position so it survives async
@@ -827,16 +1249,37 @@ export default function Dashboard() {
   };
 
   const syncEditorContent = () => {
-    if (editorRef.current) {
-      setBlogForm((prev) => ({
-        ...prev,
-        content: editorRef.current!.innerHTML,
-      }));
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    // Get current selection parent node
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    let cursorNode: Node | null = null;
+    if (sel && sel.rangeCount > 0) {
+      cursorNode = sel.getRangeAt(0).startContainer;
     }
+
+    // Clean up empty styled spans where the cursor is NOT active
+    editor.querySelectorAll("span").forEach((span) => {
+      const text = span.textContent || "";
+      if (text === "" || text === "\u200B") {
+        if (cursorNode && (span === cursorNode || span.contains(cursorNode))) {
+          return;
+        }
+        span.remove();
+      }
+    });
+
+    setBlogForm((prev) => ({
+      ...prev,
+      content: editor.innerHTML,
+    }));
+    setBlogFormDirty(true);
   };
 
   const applyEditorImageAlign = (align: "left" | "center" | "right") => {
     if (!selectedEditorImage) return;
+    takeSnapshot();
     restyleEditorImage(
       selectedEditorImage,
       align,
@@ -847,6 +1290,7 @@ export default function Dashboard() {
 
   const applyEditorImageWidth = (pct: number) => {
     if (!selectedEditorImage) return;
+    takeSnapshot();
     restyleEditorImage(
       selectedEditorImage,
       getEditorImageAlign(selectedEditorImage),
@@ -857,9 +1301,50 @@ export default function Dashboard() {
 
   const removeEditorImage = () => {
     if (!selectedEditorImage) return;
+    takeSnapshot();
+    const sibling = selectedEditorImage.nextSibling;
+    if (sibling && sibling.nodeType === Node.TEXT_NODE && sibling.textContent === "\u00A0") {
+      sibling.remove();
+    }
     selectedEditorImage.remove();
     setSelectedEditorImage(null);
     syncEditorContent();
+  };
+
+  const editEditorImageAlt = () => {
+    if (!selectedEditorImage) return;
+    const currentAlt = selectedEditorImage.alt || "";
+    const newAlt = window.prompt("Descriptive image alt text (for SEO/Accessibility):", currentAlt);
+    if (newAlt !== null) {
+      takeSnapshot();
+      selectedEditorImage.alt = newAlt.trim();
+      syncEditorContent();
+    }
+  };
+
+  const replaceEditorImage = async (file: File) => {
+    if (!selectedEditorImage) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("siteId", selectedSite || "general");
+
+    try {
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+      if (res.ok) {
+        takeSnapshot();
+        const json = await res.json();
+        selectedEditorImage.src = json.url;
+        syncEditorContent();
+      } else {
+        alert("Failed to upload replacement image.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Replacement upload error.");
+    }
   };
 
   const deselectEditorImage = () => {
@@ -880,15 +1365,14 @@ export default function Dashboard() {
     setSelectedEditorImage(img);
   };
 
-  // Insert an uploaded image at the last known cursor position inside the
-  // visual editor. Native file pickers blur the page and clear the live
-  // selection, so we restore a saved Range instead of relying on
-  // document.execCommand's "current selection" (which would otherwise be
-  // gone by the time the upload finishes).
-  const insertEditorImage = (url: string, alt: string) => {
+  const insertEditorImage = (url: string, defaultAlt: string) => {
     const editor = editorRef.current;
     if (!editor) return;
 
+    const altText = window.prompt("Descriptive image alt text (for SEO/Accessibility):") || "";
+    const cleanAlt = altText.trim() || defaultAlt.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").trim();
+
+    takeSnapshot();
     editor.focus();
     const sel = window.getSelection();
     let range: Range;
@@ -907,21 +1391,15 @@ export default function Dashboard() {
 
     const img = document.createElement("img");
     img.src = url;
-    img.alt = alt;
-    img.className = "editable-blog-image";
-    img.draggable = true;
+    img.alt = cleanAlt;
+    img.className = "editable-blog-image select-none cursor-pointer";
     img.style.cursor = "grab";
     restyleEditorImage(img, "center", 60);
 
     range.deleteContents();
     range.insertNode(img);
 
-    // Left/right aligned images use CSS float, which is taken out of normal
-    // text flow — clicking in empty space below a float can otherwise land
-    // the cursor before it instead of after. A trailing space gives the
-    // user a real in-flow anchor immediately after the image to click/type
-    // into reliably.
-    const anchor = document.createTextNode(" ");
+    const anchor = document.createTextNode("\u00A0");
     img.after(anchor);
 
     const after = document.createRange();
@@ -935,40 +1413,89 @@ export default function Dashboard() {
     selectEditorImage(img);
   };
 
-  // Sync content after a native drag-and-drop reposition of an image inside
-  // the editor (execCommand-style "input" events aren't guaranteed to fire
-  // for drag operations in every browser, so we sync explicitly).
-  const handleEditorDrop = () => {
-    setTimeout(() => syncEditorContent(), 0);
-  };
-
-  // document.execCommand('fontSize') only supports legacy sizes 1-7 via
-  // a deprecated <font> tag. We let it mark the selection, then swap the
-  // <font size="7"> wrapper for a normal span with a real pixel size.
   const applyEditorFontSize = (px: string) => {
-    withEditorSelection(() => {
-      document.execCommand("fontSize", false, "7");
-      const editor = editorRef.current;
-      if (editor) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+
+    if (!range.collapsed) {
+      takeSnapshot();
+      withEditorSelection(() => {
+        document.execCommand("fontSize", false, "7");
         editor.querySelectorAll('font[size="7"]').forEach((el) => {
           const span = document.createElement("span");
           span.style.fontSize = px;
           span.innerHTML = el.innerHTML;
           el.replaceWith(span);
         });
-      }
-    });
+      });
+    } else {
+      applyCollapsedStyle("fontSize", px, range, sel);
+    }
+  };
+
+  const applyEditorFontFamily = (fontName: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+
+    if (!range.collapsed) {
+      takeSnapshot();
+      withEditorSelection(() => {
+        document.execCommand("fontName", false, fontName);
+        editor.querySelectorAll(`font[face="${fontName}"]`).forEach((el) => {
+          const span = document.createElement("span");
+          span.style.fontFamily = fontName;
+          span.innerHTML = el.innerHTML;
+          el.replaceWith(span);
+        });
+      });
+    } else {
+      applyCollapsedStyle("fontFamily", fontName, range, sel);
+    }
+  };
+
+  const applyEditorTextColor = (color: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+
+    const range = sel.getRangeAt(0);
+
+    if (!range.collapsed) {
+      takeSnapshot();
+      withEditorSelection(() => {
+        document.execCommand("foreColor", false, color);
+        editor.querySelectorAll(`font[color="${color}"]`).forEach((el) => {
+          const span = document.createElement("span");
+          span.style.color = color;
+          span.innerHTML = el.innerHTML;
+          el.replaceWith(span);
+        });
+      });
+    } else {
+      applyCollapsedStyle("color", color, range, sel);
+    }
   };
 
   const applyEditorLink = () => {
-    // Capture the selection BEFORE prompt() runs — some browsers treat the
-    // dialog as enough of a context switch to clear it otherwise.
     saveEditorSelection();
     const url = window.prompt(
       "Link URL (e.g. https://example.com):",
       "https://",
     );
     if (url) {
+      takeSnapshot();
       withEditorSelection(() => document.execCommand("createLink", false, url));
     }
   };
@@ -1000,7 +1527,7 @@ export default function Dashboard() {
           <div className="relative">
             <select
               value={selectedSite}
-              onChange={(e) => setSelectedSite(e.target.value)}
+              onChange={(e) => handleSiteChange(e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm font-semibold rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 cursor-pointer appearance-none transition-colors"
             >
               <option value="gotolatest">🌐 GoToLatest (Next.js)</option>
@@ -1016,7 +1543,7 @@ export default function Dashboard() {
         {/* TABS SELECT NAVIGATION */}
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto scrollbar-hide">
           <button
-            onClick={() => setActiveTab("overview")}
+            onClick={() => handleTabChange("overview")}
             className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all ${
               activeTab === "overview"
                 ? "bg-indigo-600/10 text-indigo-400 border-l-4 border-indigo-500 font-bold"
@@ -1028,7 +1555,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => setActiveTab("metadata")}
+            onClick={() => handleTabChange("metadata")}
             className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all ${
               activeTab === "metadata"
                 ? "bg-indigo-600/10 text-indigo-400 border-l-4 border-indigo-500 font-bold"
@@ -1040,7 +1567,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => setActiveTab("blogs")}
+            onClick={() => handleTabChange("blogs")}
             className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all ${
               activeTab === "blogs"
                 ? "bg-indigo-600/10 text-indigo-400 border-l-4 border-indigo-500 font-bold"
@@ -1052,7 +1579,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => setActiveTab("redirects")}
+            onClick={() => handleTabChange("redirects")}
             className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all ${
               activeTab === "redirects"
                 ? "bg-indigo-600/10 text-indigo-400 border-l-4 border-indigo-500 font-bold"
@@ -1064,7 +1591,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => setActiveTab("trackers")}
+            onClick={() => handleTabChange("trackers")}
             className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all ${
               activeTab === "trackers"
                 ? "bg-indigo-600/10 text-indigo-400 border-l-4 border-indigo-500 font-bold"
@@ -1076,7 +1603,7 @@ export default function Dashboard() {
           </button>
 
           <button
-            onClick={() => setActiveTab("leads")}
+            onClick={() => handleTabChange("leads")}
             className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-semibold rounded-xl transition-all ${
               activeTab === "leads"
                 ? "bg-indigo-600/10 text-indigo-400 border-l-4 border-indigo-500 font-bold"
@@ -1659,8 +2186,10 @@ export default function Dashboard() {
                   </h3>
                   <button
                     onClick={() => {
-                      setSelectedBlog(null);
-                      resetBlogForm();
+                      confirmDiscardIfDirty(() => {
+                        setSelectedBlog(null);
+                        resetBlogForm();
+                      });
                     }}
                     className="flex items-center gap-1 text-xs bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-2.5 py-1.5 rounded-lg transition-colors"
                   >
@@ -1685,15 +2214,28 @@ export default function Dashboard() {
                         <div
                           key={blog.id}
                           onClick={() => selectBlogForEdit(blog)}
-                          className={`p-3 rounded-xl border cursor-pointer text-left transition-all ${
+                          className={`p-3 rounded-xl border cursor-pointer text-left transition-all relative group ${
                             selectedBlog?.id === blog.id
                               ? "bg-indigo-500/10 border-indigo-500 text-white shadow-sm"
                               : "bg-slate-950/40 border-slate-850 text-slate-300 hover:border-slate-700 hover:bg-slate-900/40"
                           }`}
                         >
-                          <h4 className="font-bold text-sm truncate">
-                            {blog.title}
-                          </h4>
+                          <div className="flex justify-between items-start gap-2">
+                            <h4 className="font-bold text-sm truncate flex-1">
+                              {blog.title}
+                            </h4>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleBlogDelete(blog.slug);
+                              }}
+                              title="Delete blog post"
+                              className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-red-400 hover:bg-slate-850 rounded transition-all shrink-0"
+                            >
+                              <Trash className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                           <div className="flex justify-between items-center mt-2 text-[10px] text-slate-400">
                             <span>
                               Slug:{" "}
@@ -1776,12 +2318,10 @@ export default function Dashboard() {
                           type="text"
                           required
                           value={blogForm.slug || ""}
-                          onChange={(e) =>
-                            setBlogForm((prev) => ({
-                              ...prev,
-                              slug: e.target.value,
-                            }))
-                          }
+                          onChange={(e) => {
+                            updateBlogForm({ slug: e.target.value });
+                            slugManuallyEditedRef.current = true;
+                          }}
                           placeholder="auto-generated-slug"
                           className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500 font-mono text-indigo-400"
                         />
@@ -1794,10 +2334,7 @@ export default function Dashboard() {
                           type="text"
                           value={blogForm.category || ""}
                           onChange={(e) =>
-                            setBlogForm((prev) => ({
-                              ...prev,
-                              category: e.target.value,
-                            }))
+                            updateBlogForm({ category: e.target.value })
                           }
                           placeholder="e.g. Marketing, Case Studies"
                           className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
@@ -1812,10 +2349,7 @@ export default function Dashboard() {
                             type="text"
                             value={blogForm.featuredImage || ""}
                             onChange={(e) =>
-                              setBlogForm((prev) => ({
-                                ...prev,
-                                featuredImage: e.target.value,
-                              }))
+                              updateBlogForm({ featuredImage: e.target.value })
                             }
                             placeholder="Image link (Unsplash, Pexels, local assets)"
                             className="flex-1 bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
@@ -1843,10 +2377,7 @@ export default function Dashboard() {
                                   });
                                   if (res.ok) {
                                     const json = await res.json();
-                                    setBlogForm((prev) => ({
-                                      ...prev,
-                                      featuredImage: json.url,
-                                    }));
+                                    updateBlogForm({ featuredImage: json.url });
                                   } else {
                                     alert("Failed to upload image.");
                                   }
@@ -1867,10 +2398,7 @@ export default function Dashboard() {
                           type="text"
                           value={blogForm.summary || ""}
                           onChange={(e) =>
-                            setBlogForm((prev) => ({
-                              ...prev,
-                              summary: e.target.value,
-                            }))
+                            updateBlogForm({ summary: e.target.value })
                           }
                           placeholder="Short summary for archive page list preview"
                           className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
@@ -1906,535 +2434,518 @@ export default function Dashboard() {
                               <Eye className="h-3 w-3" />
                               Visual Editor
                             </button>
-                            {contentViewMode === "preview" && (
-                              <button
-                                type="button"
-                                onClick={() => setIsEditorFullscreen(true)}
-                                title="Full screen editing"
-                                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold text-slate-400 hover:text-slate-200 transition-colors"
-                              >
-                                <Maximize2 className="h-3 w-3" />
-                              </button>
-                            )}
                           </div>
                         </div>
-                        {contentViewMode === "raw" ? (
+                        <div className={contentViewMode === "raw" ? "block" : "hidden"}>
                           <textarea
                             rows={15}
                             required
                             value={blogForm.content || ""}
                             onChange={(e) =>
-                              setBlogForm((prev) => ({
-                                ...prev,
-                                content: e.target.value,
-                              }))
+                              updateBlogForm({ content: e.target.value })
                             }
                             placeholder="Write article details, or click Generate with AI above..."
                             className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500 font-mono"
                           />
-                        ) : (
-                          <div
-                            className={
-                              isEditorFullscreen
-                                ? "fixed inset-0 z-[70] bg-white flex flex-col"
-                                : "rounded-lg border border-slate-850 bg-white overflow-hidden flex flex-col"
-                            }
-                          >
-                            {isEditorFullscreen && (
-                              <div className="bg-indigo-600 px-4 py-2 flex items-center justify-between text-white shrink-0">
-                                <span className="text-xs font-bold">
-                                  Full Screen Editor
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => setIsEditorFullscreen(false)}
-                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-xs font-bold transition-colors"
-                                >
-                                  <Minimize2 className="h-3.5 w-3.5" />
-                                  Exit Full Screen
-                                </button>
-                              </div>
-                            )}
-                            {/* Visual Editor Toolbar */}
-                            <div className="bg-slate-100 border-b border-slate-200 px-3 py-2 flex flex-wrap gap-1.5 items-center select-none shrink-0">
-                              {/* Bold, Italic, Underline */}
-                              <button
-                                type="button"
-                                title="Bold (Ctrl+B)"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand("bold", false),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors font-bold text-xs shadow-sm"
-                              >
-                                B
-                              </button>
-                              <button
-                                type="button"
-                                title="Italic (Ctrl+I)"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand("italic", false),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors italic text-xs shadow-sm"
-                              >
-                                I
-                              </button>
-                              <button
-                                type="button"
-                                title="Underline (Ctrl+U)"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand("underline", false),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors underline text-xs shadow-sm"
-                              >
-                                U
-                              </button>
-                              <div className="w-px h-5 bg-slate-300 mx-1" />
+                        </div>
+                        <div className={contentViewMode === "preview" ? "block" : "hidden"}>
+                          {(() => {
+                            const editorContent = (
+                              <div className="rounded-lg border border-slate-850 bg-white overflow-hidden flex flex-col">
+                                {/* Visual Editor Toolbar */}
+                                <div className="bg-slate-100 border-b border-slate-200 px-3 py-2 flex flex-wrap gap-1.5 items-center select-none shrink-0">
+                                  {/* Undo / Redo */}
+                                  <button
+                                    type="button"
+                                    title="Undo (Ctrl+Z)"
+                                    onClick={handleUndo}
+                                    disabled={undoStackRef.current.length === 0}
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white transition-colors shadow-sm"
+                                  >
+                                    <Undo className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Redo (Ctrl+Y)"
+                                    onClick={handleRedo}
+                                    disabled={redoStackRef.current.length === 0}
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white transition-colors shadow-sm"
+                                  >
+                                    <Redo className="h-3 w-3" />
+                                  </button>
+                                  <div className="w-px h-5 bg-slate-300 mx-1" />
 
-                              {/* Headings */}
-                              <button
-                                type="button"
-                                title="Heading 2"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "formatBlock",
-                                      false,
-                                      "H2",
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-black text-[10px] shadow-sm uppercase"
-                              >
-                                H2
-                              </button>
-                              <button
-                                type="button"
-                                title="Heading 3"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "formatBlock",
-                                      false,
-                                      "H3",
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-bold text-[10px] shadow-sm uppercase"
-                              >
-                                H3
-                              </button>
-                              <button
-                                type="button"
-                                title="Normal Paragraph"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "formatBlock",
-                                      false,
-                                      "P",
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
-                              >
-                                Paragraph
-                              </button>
-                              <div className="w-px h-5 bg-slate-300 mx-1" />
+                                  {/* Bold, Italic, Underline */}
+                                  <button
+                                    type="button"
+                                    title="Bold (Ctrl+B)"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand("bold", false),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors font-bold text-xs shadow-sm"
+                                  >
+                                    B
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Italic (Ctrl+I)"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand("italic", false),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors italic text-xs shadow-sm"
+                                  >
+                                    I
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Underline (Ctrl+U)"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand("underline", false),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors underline text-xs shadow-sm"
+                                  >
+                                    U
+                                  </button>
+                                  <div className="w-px h-5 bg-slate-300 mx-1" />
 
-                              {/* Lists */}
-                              <button
-                                type="button"
-                                title="Unordered List"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "insertUnorderedList",
-                                      false,
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
-                              >
-                                • Bullet List
-                              </button>
-                              <button
-                                type="button"
-                                title="Ordered List"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "insertOrderedList",
-                                      false,
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
-                              >
-                                1. Number List
-                              </button>
-                              <div className="w-px h-5 bg-slate-300 mx-1" />
+                                  {/* Headings */}
+                                  <button
+                                    type="button"
+                                    title="Heading 2"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "formatBlock",
+                                          false,
+                                          "<h2>",
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-black text-[10px] shadow-sm uppercase"
+                                  >
+                                    H2
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Heading 3"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "formatBlock",
+                                          false,
+                                          "<h3>",
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-bold text-[10px] shadow-sm uppercase"
+                                  >
+                                    H3
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Normal Paragraph"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "formatBlock",
+                                          false,
+                                          "<p>",
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
+                                  >
+                                    Paragraph
+                                  </button>
+                                  <div className="w-px h-5 bg-slate-300 mx-1" />
 
-                              {/* Quote block */}
-                              <button
-                                type="button"
-                                title="Blockquote"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "formatBlock",
-                                      false,
-                                      "BLOCKQUOTE",
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm italic font-semibold"
-                              >
-                                Quote
-                              </button>
-                              <button
-                                type="button"
-                                title="Strikethrough"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "strikeThrough",
-                                      false,
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                              >
-                                <Strikethrough className="h-3 w-3" />
-                              </button>
-                              <div className="w-px h-5 bg-slate-300 mx-1" />
+                                  {/* Lists */}
+                                  <button
+                                    type="button"
+                                    title="Unordered List"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "insertUnorderedList",
+                                          false,
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
+                                  >
+                                    • Bullet List
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Ordered List"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "insertOrderedList",
+                                          false,
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
+                                  >
+                                    1. Number List
+                                  </button>
+                                  <div className="w-px h-5 bg-slate-300 mx-1" />
 
-                              {/* Alignment */}
-                              <button
-                                type="button"
-                                title="Align Left"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand("justifyLeft", false),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                              >
-                                <AlignLeft className="h-3 w-3" />
-                              </button>
-                              <button
-                                type="button"
-                                title="Align Center"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "justifyCenter",
-                                      false,
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                              >
-                                <AlignCenter className="h-3 w-3" />
-                              </button>
-                              <button
-                                type="button"
-                                title="Align Right"
-                                onClick={() =>
-                                  withEditorSelection(() =>
-                                    document.execCommand(
-                                      "justifyRight",
-                                      false,
-                                    ),
-                                  )
-                                }
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                              >
-                                <AlignRight className="h-3 w-3" />
-                              </button>
-                              <div className="w-px h-5 bg-slate-300 mx-1" />
+                                  {/* Quote block */}
+                                  <button
+                                    type="button"
+                                    title="Blockquote"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "formatBlock",
+                                          false,
+                                          "<blockquote>",
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm italic font-semibold"
+                                  >
+                                    Quote
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Strikethrough"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "strikeThrough",
+                                          false,
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                                  >
+                                    <Strikethrough className="h-3 w-3" />
+                                  </button>
+                                  <div className="w-px h-5 bg-slate-300 mx-1" />
 
-                              {/* Font family */}
-                              <select
-                                title="Font family"
-                                defaultValue=""
-                                onChange={(e) => {
-                                  const font = e.target.value;
-                                  if (font) {
-                                    withEditorSelection(() =>
-                                      document.execCommand(
-                                        "fontName",
-                                        false,
-                                        font,
-                                      ),
-                                    );
-                                  }
-                                  e.target.value = "";
-                                }}
-                                className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[90px]"
-                              >
-                                <option value="">Font</option>
-                                <option value="Outfit, sans-serif">
-                                  Outfit
-                                </option>
-                                <option value="Arial, sans-serif">
-                                  Arial
-                                </option>
-                                <option value="Georgia, serif">
-                                  Georgia
-                                </option>
-                                <option value="'Times New Roman', serif">
-                                  Times New Roman
-                                </option>
-                                <option value="Verdana, sans-serif">
-                                  Verdana
-                                </option>
-                                <option value="'Courier New', monospace">
-                                  Courier New
-                                </option>
-                              </select>
+                                  {/* Alignment */}
+                                  <button
+                                    type="button"
+                                    title="Align Left"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand("justifyLeft", false),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                                  >
+                                    <AlignLeft className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Align Center"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "justifyCenter",
+                                          false,
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                                  >
+                                    <AlignCenter className="h-3 w-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title="Align Right"
+                                    onClick={() =>
+                                      withEditorSelection(() =>
+                                        document.execCommand(
+                                          "justifyRight",
+                                          false,
+                                        ),
+                                      )
+                                    }
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                                  >
+                                    <AlignRight className="h-3 w-3" />
+                                  </button>
+                                  <div className="w-px h-5 bg-slate-300 mx-1" />
 
-                              {/* Font size */}
-                              <select
-                                title="Font size"
-                                defaultValue=""
-                                onChange={(e) => {
-                                  if (e.target.value) {
-                                    applyEditorFontSize(e.target.value);
-                                  }
-                                  e.target.value = "";
-                                }}
-                                className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[70px]"
-                              >
-                                <option value="">Size</option>
-                                <option value="12px">12px</option>
-                                <option value="14px">14px</option>
-                                <option value="16px">16px</option>
-                                <option value="18px">18px</option>
-                                <option value="24px">24px</option>
-                                <option value="32px">32px</option>
-                                <option value="48px">48px</option>
-                              </select>
-
-                              {/* Text color */}
-                              <label
-                                title="Text color"
-                                className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm cursor-pointer flex items-center"
-                              >
-                                <input
-                                  type="color"
-                                  defaultValue="#1e293b"
-                                  className="h-3.5 w-3.5 cursor-pointer border-none p-0 bg-transparent"
-                                  onMouseDown={saveEditorSelection}
-                                  onChange={(e) => {
-                                    const color = e.target.value;
-                                    withEditorSelection(() =>
-                                      document.execCommand(
-                                        "foreColor",
-                                        false,
-                                        color,
-                                      ),
-                                    );
-                                  }}
-                                />
-                              </label>
-
-                              {/* Link */}
-                              <button
-                                type="button"
-                                title="Insert Link"
-                                onClick={applyEditorLink}
-                                className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                              >
-                                <LinkIcon className="h-3 w-3" />
-                              </button>
-                              <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                              {/* Upload and Insert Image */}
-                              <label className="px-2.5 py-1 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer text-[10px] font-bold shadow-sm flex items-center gap-1">
-                                <Upload className="h-3 w-3" />
-                                Add Body Image
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  className="hidden"
-                                  onChange={async (e) => {
-                                    const file = e.target.files?.[0];
-                                    const inputEl = e.target;
-                                    if (!file) return;
-                                    const formData = new FormData();
-                                    formData.append("file", file);
-                                    formData.append(
-                                      "siteId",
-                                      selectedSite || "general",
-                                    );
-                                    try {
-                                      const res = await fetch("/api/upload", {
-                                        method: "POST",
-                                        body: formData,
-                                      });
-                                      if (res.ok) {
-                                        const json = await res.json();
-                                        insertEditorImage(json.url, file.name);
-                                      } else {
-                                        alert("Failed to upload image.");
+                                  {/* Font family */}
+                                  <select
+                                    title="Font family"
+                                    defaultValue=""
+                                    onChange={(e) => {
+                                      const font = e.target.value;
+                                      if (font) {
+                                        applyEditorFontFamily(font);
                                       }
-                                    } catch (err) {
-                                      console.error(err);
-                                      alert("Upload error.");
-                                    } finally {
-                                      inputEl.value = "";
+                                      e.target.value = "";
+                                    }}
+                                    className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[90px]"
+                                  >
+                                    <option value="">Font</option>
+                                    <option value="Outfit, sans-serif">Outfit</option>
+                                    <option value="Arial, sans-serif">Arial</option>
+                                    <option value="Georgia, serif">Georgia</option>
+                                    <option value="'Times New Roman', serif">Times New Roman</option>
+                                    <option value="Verdana, sans-serif">Verdana</option>
+                                    <option value="'Courier New', monospace">Courier New</option>
+                                  </select>
+
+                                  {/* Font size */}
+                                  <select
+                                    title="Font size"
+                                    defaultValue=""
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        applyEditorFontSize(e.target.value);
+                                      }
+                                      e.target.value = "";
+                                    }}
+                                    className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[70px]"
+                                  >
+                                    <option value="">Size</option>
+                                    <option value="12px">12px</option>
+                                    <option value="14px">14px</option>
+                                    <option value="16px">16px</option>
+                                    <option value="18px">18px</option>
+                                    <option value="24px">24px</option>
+                                    <option value="32px">32px</option>
+                                    <option value="48px">48px</option>
+                                  </select>
+
+                                  {/* Text color */}
+                                  <label
+                                    title="Text color"
+                                    className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm cursor-pointer flex items-center"
+                                  >
+                                    <input
+                                      type="color"
+                                      defaultValue="#1e293b"
+                                      className="h-3.5 w-3.5 cursor-pointer border-none p-0 bg-transparent"
+                                      onMouseDown={saveEditorSelection}
+                                      onChange={(e) => {
+                                        const color = e.target.value;
+                                        applyEditorTextColor(color);
+                                      }}
+                                    />
+                                  </label>
+
+                                  {/* Link */}
+                                  <button
+                                    type="button"
+                                    title="Insert Link"
+                                    onClick={applyEditorLink}
+                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
+                                  >
+                                    <LinkIcon className="h-3 w-3" />
+                                  </button>
+                                  <div className="w-px h-5 bg-slate-300 mx-1" />
+
+                                  {/* Upload and Insert Image */}
+                                  <label className="px-2.5 py-1 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer text-[10px] font-bold shadow-sm flex items-center gap-1">
+                                    <Upload className="h-3 w-3" />
+                                    Add Body Image
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      className="hidden"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        const inputEl = e.target;
+                                        if (!file) return;
+                                        const formData = new FormData();
+                                        formData.append("file", file);
+                                        formData.append(
+                                          "siteId",
+                                          selectedSite || "general",
+                                        );
+                                        try {
+                                          const res = await fetch("/api/upload", {
+                                            method: "POST",
+                                            body: formData,
+                                          });
+                                          if (res.ok) {
+                                            const json = await res.json();
+                                            insertEditorImage(json.url, file.name);
+                                          } else {
+                                            alert("Failed to upload image.");
+                                          }
+                                        } catch (err) {
+                                          console.error(err);
+                                          alert("Upload error.");
+                                        } finally {
+                                          inputEl.value = "";
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                </div>
+
+                                {/* Image alignment & size toolbar — shown when an image is selected */}
+                                {selectedEditorImage && (
+                                  <div className="bg-indigo-50 border-b border-indigo-200 px-3 py-2 flex flex-wrap items-center gap-2 text-[10px] shrink-0">
+                                    <span className="font-bold text-indigo-700">
+                                      Image:
+                                    </span>
+                                    <div className="flex gap-1">
+                                      {(
+                                        [
+                                          ["left", "⬅ Left"],
+                                          ["center", "◻ Center"],
+                                          ["right", "➡ Right"],
+                                        ] as const
+                                      ).map(([align, label]) => (
+                                        <button
+                                          key={align}
+                                          type="button"
+                                          onClick={() =>
+                                            applyEditorImageAlign(align)
+                                          }
+                                          className={`px-2 py-1 rounded border font-bold transition-colors ${
+                                            getEditorImageAlign(
+                                              selectedEditorImage,
+                                            ) === align
+                                              ? "bg-indigo-600 border-indigo-600 text-white"
+                                              : "bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                                          }`}
+                                        >
+                                          {label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <div className="w-px h-4 bg-indigo-200" />
+                                    <span className="font-bold text-indigo-700">
+                                      Size:
+                                    </span>
+                                    <div className="flex gap-1">
+                                      {[25, 40, 60, 80, 100].map((pct) => (
+                                        <button
+                                          key={pct}
+                                          type="button"
+                                          onClick={() => applyEditorImageWidth(pct)}
+                                          className={`px-2 py-1 rounded border font-bold transition-colors ${
+                                            getEditorImageWidth(
+                                              selectedEditorImage,
+                                            ) === pct
+                                              ? "bg-indigo-600 border-indigo-600 text-white"
+                                              : "bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                                          }`}
+                                        >
+                                          {pct}%
+                                        </button>
+                                      ))}
+                                    </div>
+                                    <div className="w-px h-4 bg-indigo-200" />
+                                    <button
+                                      type="button"
+                                      onClick={editEditorImageAlt}
+                                      className="px-2 py-1 rounded border border-indigo-200 bg-white text-indigo-700 font-bold hover:bg-indigo-50"
+                                    >
+                                      Edit Alt Text
+                                    </button>
+                                    <label className="px-2 py-1 rounded border border-indigo-200 bg-white text-indigo-700 font-bold hover:bg-indigo-50 cursor-pointer">
+                                      Replace Image
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) {
+                                            replaceEditorImage(file);
+                                          }
+                                        }}
+                                      />
+                                    </label>
+                                    <button
+                                      type="button"
+                                      onClick={removeEditorImage}
+                                      className="px-2 py-1 rounded border border-red-200 bg-white text-red-600 font-bold hover:bg-red-50"
+                                    >
+                                      Remove
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={deselectEditorImage}
+                                      className="ml-auto px-2 py-1 text-slate-500 font-bold hover:text-slate-700"
+                                    >
+                                      Done
+                                    </button>
+                                  </div>
+                                )}
+
+                                {/* Content Editable Container */}
+                                <div
+                                  contentEditable
+                                  suppressContentEditableWarning
+                                  onInput={(e) => {
+                                    const html = e.currentTarget.innerHTML;
+                                    updateBlogForm({ content: html });
+                                  }}
+                                  onBlur={(e) => {
+                                    if (selectedEditorImage) {
+                                      selectedEditorImage.style.outline = "";
+                                      selectedEditorImage.style.outlineOffset = "";
+                                    }
+                                    const html = e.currentTarget.innerHTML;
+                                    updateBlogForm({ content: html });
+                                  }}
+                                  onMouseUp={saveEditorSelection}
+                                  onKeyUp={saveEditorSelection}
+                                  onKeyDown={handleEditorKeyDown}
+                                  onPaste={handleEditorPaste}
+                                  onPointerDown={handleEditorPointerDown}
+                                  onPointerMove={handleEditorPointerMove}
+                                  onPointerUp={handleEditorPointerUp}
+                                  onPointerCancel={handleEditorPointerCancel}
+                                  onDragStart={(e) => e.preventDefault()}
+                                  onDrop={handleEditorDrop}
+                                  onDragEnd={handleEditorDrop}
+                                  className="w-full h-[400px] overflow-y-auto bg-white text-slate-900 p-6 focus:outline-none blog-visual-editor-content prose max-w-none"
+                                  style={{ minHeight: "350px" }}
+                                  ref={(el) => {
+                                    editorRef.current = el;
+                                    if (
+                                      el &&
+                                      document.activeElement !== el &&
+                                      el.innerHTML !== (blogForm.content || "")
+                                    ) {
+                                      el.innerHTML = blogForm.content || "";
+                                    }
+                                  }}
+                                  onClick={(e) => {
+                                    const target = e.target as HTMLElement;
+                                    if (target.tagName === "IMG") {
+                                      selectEditorImage(target as HTMLImageElement);
+                                    } else {
+                                      deselectEditorImage();
                                     }
                                   }}
                                 />
-                              </label>
-                            </div>
 
-                            {/* Image alignment & size toolbar — shown when an image is selected */}
-                            {selectedEditorImage && (
-                              <div className="bg-indigo-50 border-b border-indigo-200 px-3 py-2 flex flex-wrap items-center gap-2 text-[10px] shrink-0">
-                                <span className="font-bold text-indigo-700">
-                                  Image:
-                                </span>
-                                <div className="flex gap-1">
-                                  {(
-                                    [
-                                      ["left", "⬅ Left"],
-                                      ["center", "◻ Center"],
-                                      ["right", "➡ Right"],
-                                    ] as const
-                                  ).map(([align, label]) => (
-                                    <button
-                                      key={align}
-                                      type="button"
-                                      onClick={() =>
-                                        applyEditorImageAlign(align)
-                                      }
-                                      className={`px-2 py-1 rounded border font-bold transition-colors ${
-                                        getEditorImageAlign(
-                                          selectedEditorImage,
-                                        ) === align
-                                          ? "bg-indigo-600 border-indigo-600 text-white"
-                                          : "bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-                                      }`}
-                                    >
-                                      {label}
-                                    </button>
-                                  ))}
+                                {/* Editor Tips Footer */}
+                                <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none shrink-0">
+                                  <span>
+                                    💡 Click an image to align/resize it, or drag
+                                    it to reposition anywhere in the post.
+                                  </span>
+                                  <span className="font-bold text-indigo-600">
+                                    Visual Editor Active
+                                  </span>
                                 </div>
-                                <div className="w-px h-4 bg-indigo-200" />
-                                <span className="font-bold text-indigo-700">
-                                  Size:
-                                </span>
-                                <div className="flex gap-1">
-                                  {[25, 40, 60, 80, 100].map((pct) => (
-                                    <button
-                                      key={pct}
-                                      type="button"
-                                      onClick={() => applyEditorImageWidth(pct)}
-                                      className={`px-2 py-1 rounded border font-bold transition-colors ${
-                                        getEditorImageWidth(
-                                          selectedEditorImage,
-                                        ) === pct
-                                          ? "bg-indigo-600 border-indigo-600 text-white"
-                                          : "bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-                                      }`}
-                                    >
-                                      {pct}%
-                                    </button>
-                                  ))}
-                                </div>
-                                <div className="w-px h-4 bg-indigo-200" />
-                                <button
-                                  type="button"
-                                  onClick={removeEditorImage}
-                                  className="px-2 py-1 rounded border border-red-200 bg-white text-red-600 font-bold hover:bg-red-50"
-                                >
-                                  Remove
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={deselectEditorImage}
-                                  className="ml-auto px-2 py-1 text-slate-500 font-bold hover:text-slate-700"
-                                >
-                                  Done
-                                </button>
                               </div>
-                            )}
-
-                            {/* Content Editable Container */}
-                            <div
-                              contentEditable
-                              suppressContentEditableWarning
-                              onInput={(e) => {
-                                const html = e.currentTarget.innerHTML;
-                                setBlogForm((prev) => ({
-                                  ...prev,
-                                  content: html,
-                                }));
-                              }}
-                              onBlur={(e) => {
-                                if (selectedEditorImage) {
-                                  selectedEditorImage.style.outline = "";
-                                  selectedEditorImage.style.outlineOffset = "";
-                                }
-                                const html = e.currentTarget.innerHTML;
-                                setBlogForm((prev) => ({
-                                  ...prev,
-                                  content: html,
-                                }));
-                              }}
-                              onMouseUp={saveEditorSelection}
-                              onKeyUp={saveEditorSelection}
-                              onDrop={handleEditorDrop}
-                              onDragEnd={handleEditorDrop}
-                              className={
-                                isEditorFullscreen
-                                  ? "w-full flex-1 overflow-y-auto bg-white text-slate-900 p-8 focus:outline-none blog-visual-editor-content prose max-w-3xl mx-auto"
-                                  : "w-full h-[400px] overflow-y-auto bg-white text-slate-900 p-6 focus:outline-none blog-visual-editor-content prose max-w-none"
-                              }
-                              style={
-                                isEditorFullscreen
-                                  ? undefined
-                                  : { minHeight: "350px" }
-                              }
-                              ref={(el) => {
-                                editorRef.current = el;
-                                if (
-                                  el &&
-                                  document.activeElement !== el &&
-                                  el.innerHTML !== (blogForm.content || "")
-                                ) {
-                                  el.innerHTML = blogForm.content || "";
-                                }
-                              }}
-                              onClick={(e) => {
-                                const target = e.target as HTMLElement;
-                                if (target.tagName === "IMG") {
-                                  selectEditorImage(target as HTMLImageElement);
-                                } else {
-                                  deselectEditorImage();
-                                }
-                              }}
-                            />
-
-                            {/* Editor Tips Footer */}
-                            <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none shrink-0">
-                              <span>
-                                💡 Click an image to align/resize it, or drag
-                                it to reposition anywhere in the post.
-                              </span>
-                              <span className="font-bold text-indigo-600">
-                                Visual Editor Active
-                              </span>
-                            </div>
-                          </div>
-                        )}
+                            );
+                            return editorContent;
+                          })()}
+                        </div>
                       </div>
                     </div>
 
@@ -2452,10 +2963,7 @@ export default function Dashboard() {
                             type="text"
                             value={blogForm.seoTitle || ""}
                             onChange={(e) =>
-                              setBlogForm((prev) => ({
-                                ...prev,
-                                seoTitle: e.target.value,
-                              }))
+                              updateBlogForm({ seoTitle: e.target.value })
                             }
                             placeholder="Defaults to Post Title if empty"
                             className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
@@ -2469,10 +2977,7 @@ export default function Dashboard() {
                             type="text"
                             value={blogForm.seoOgImage || ""}
                             onChange={(e) =>
-                              setBlogForm((prev) => ({
-                                ...prev,
-                                seoOgImage: e.target.value,
-                              }))
+                              updateBlogForm({ seoOgImage: e.target.value })
                             }
                             placeholder="Defaults to Featured Image if empty"
                             className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
@@ -2486,10 +2991,7 @@ export default function Dashboard() {
                             type="text"
                             value={blogForm.seoDescription || ""}
                             onChange={(e) =>
-                              setBlogForm((prev) => ({
-                                ...prev,
-                                seoDescription: e.target.value,
-                              }))
+                              updateBlogForm({ seoDescription: e.target.value })
                             }
                             placeholder="Defaults to Summary if empty"
                             className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-indigo-500"
@@ -2505,10 +3007,7 @@ export default function Dashboard() {
                           type="checkbox"
                           checked={blogForm.published || false}
                           onChange={(e) =>
-                            setBlogForm((prev) => ({
-                              ...prev,
-                              published: e.target.checked,
-                            }))
+                            updateBlogForm({ published: e.target.checked })
                           }
                           className="h-4.5 w-4.5 accent-indigo-600 rounded bg-slate-950 border border-slate-800 focus:ring-0 focus:ring-offset-0 cursor-pointer"
                         />

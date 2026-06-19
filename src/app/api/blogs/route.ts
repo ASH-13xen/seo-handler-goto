@@ -74,6 +74,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'siteId, title, and slug are required' }, { status: 400 });
     }
 
+    if (!content || !content.trim()) {
+      return NextResponse.json({ error: 'content cannot be empty' }, { status: 400 });
+    }
+
     // Check slug collision
     const existing = await prisma.blog.findUnique({
       where: {

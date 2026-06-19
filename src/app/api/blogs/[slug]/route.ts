@@ -58,6 +58,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ slug
       return NextResponse.json({ error: 'siteId is required in the body' }, { status: 400 });
     }
 
+    if (content !== undefined && (!content || !content.trim())) {
+      return NextResponse.json({ error: 'content cannot be empty' }, { status: 400 });
+    }
+
     // Check that blog exists
     const blog = await prisma.blog.findUnique({
       where: {
