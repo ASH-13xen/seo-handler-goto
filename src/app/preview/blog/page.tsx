@@ -6,8 +6,6 @@ interface PreviewPayload {
   type: "BLOG_PREVIEW_UPDATE";
   title: string;
   html: string;
-  marginLeft: number;
-  marginRight: number;
   siteId: string;
 }
 
@@ -52,23 +50,11 @@ const GENERIC_CONTENT_CSS = `
   .pb-content th { background: #f1f5f9; font-weight: 700; }
 `;
 
-function MarginWrapped({
-  marginLeft,
-  marginRight,
-  children,
-}: {
-  marginLeft: number;
-  marginRight: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{ paddingLeft: marginLeft, paddingRight: marginRight }}>
-      {children}
-    </div>
-  );
+function MarginWrapped({ children }: { children: React.ReactNode }) {
+  return <div>{children}</div>;
 }
 
-function GotolatestThemePreview({ title, html, marginLeft, marginRight }: PreviewPayload) {
+function GotolatestThemePreview({ title, html }: PreviewPayload) {
   return (
     <div className="bg-black text-white min-h-screen font-sans">
       <style dangerouslySetInnerHTML={{ __html: GOTOLATEST_CONTENT_CSS }} />
@@ -79,29 +65,35 @@ function GotolatestThemePreview({ title, html, marginLeft, marginRight }: Previe
         <h1 className="text-3xl md:text-5xl font-black uppercase mb-8 leading-tight">
           {title || "Untitled Post"}
         </h1>
-        <MarginWrapped marginLeft={marginLeft} marginRight={marginRight}>
-          <div className="pb-content" dangerouslySetInnerHTML={{ __html: html }} />
+        <MarginWrapped>
+          <div
+            className="pb-content"
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
         </MarginWrapped>
       </main>
     </div>
   );
 }
 
-function GenericThemePreview({ title, html, marginLeft, marginRight, siteId }: PreviewPayload) {
+function GenericThemePreview({ title, html, siteId }: PreviewPayload) {
   const siteName = SITE_DISPLAY_NAMES[siteId] || siteId;
   return (
     <div className="bg-white min-h-screen font-sans">
       <style dangerouslySetInnerHTML={{ __html: GENERIC_CONTENT_CSS }} />
       <div className="bg-amber-500 text-white text-[11px] font-bold text-center py-1.5 px-4">
-        Preview only — {siteName} does not have a live blog page yet, so this is a generic
-        approximation, not the real site&apos;s exact look.
+        Preview only — {siteName} does not have a live blog page yet, so this is
+        a generic approximation, not the real site&apos;s exact look.
       </div>
       <main className="max-w-3xl mx-auto w-full px-6 py-12">
         <h1 className="text-3xl md:text-4xl font-extrabold mb-8 text-slate-900 leading-tight">
           {title || "Untitled Post"}
         </h1>
-        <MarginWrapped marginLeft={marginLeft} marginRight={marginRight}>
-          <div className="pb-content" dangerouslySetInnerHTML={{ __html: html }} />
+        <MarginWrapped>
+          <div
+            className="pb-content"
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
         </MarginWrapped>
       </main>
     </div>
@@ -125,7 +117,9 @@ export default function BlogPreviewPage() {
 
   if (!payload) {
     return (
-      <div className="p-10 text-center text-slate-400 font-sans">Waiting for preview…</div>
+      <div className="p-10 text-center text-slate-400 font-sans">
+        Waiting for preview…
+      </div>
     );
   }
 

@@ -87,8 +87,6 @@ interface BlogPost {
   seoOgImage: string;
   template?: string;
   publishedAt: string;
-  marginLeft: number;
-  marginRight: number;
 }
 
 interface RedirectRule {
@@ -169,8 +167,6 @@ export default function Dashboard() {
     seoDescription: "",
     seoOgImage: "",
     template: "",
-    marginLeft: 0,
-    marginRight: 0,
   });
   const [blogMessage, setBlogMessage] = useState<{
     type: "success" | "error";
@@ -333,8 +329,8 @@ export default function Dashboard() {
   }, [blogFormDirty]);
 
   // Push the current draft to the live preview iframe. Debounced on content
-  // since Tiptap's onUpdate fires per keystroke; margin/title changes are
-  // cheap enough to post immediately.
+  // since Tiptap's onUpdate fires per keystroke; title changes are cheap
+  // enough to post immediately.
   useEffect(() => {
     const post = () => {
       previewIframeRef.current?.contentWindow?.postMessage(
@@ -342,8 +338,6 @@ export default function Dashboard() {
           type: "BLOG_PREVIEW_UPDATE",
           title: blogForm.title || "",
           html: blogForm.content || "",
-          marginLeft: blogForm.marginLeft ?? 0,
-          marginRight: blogForm.marginRight ?? 0,
           siteId: selectedSite,
         },
         window.location.origin,
@@ -351,13 +345,7 @@ export default function Dashboard() {
     };
     const timer = setTimeout(post, 300);
     return () => clearTimeout(timer);
-  }, [
-    blogForm.content,
-    blogForm.title,
-    blogForm.marginLeft,
-    blogForm.marginRight,
-    selectedSite,
-  ]);
+  }, [blogForm.content, blogForm.title, selectedSite]);
 
   // Fetch Global Stats
   const fetchStats = async () => {
@@ -584,9 +572,6 @@ export default function Dashboard() {
           title: savedBlog.title || "",
           slug: savedBlog.slug || "",
           summary: savedBlog.summary || "",
-          // The server wraps `content` with the margin-padding div before
-          // persisting/returning it (see marginWrapper.ts) — the editor must
-          // keep working with the plain, unwrapped HTML it already has.
           content: sanitizedContent,
           featuredImage: savedBlog.featuredImage || "",
           published: savedBlog.published || false,
@@ -596,8 +581,6 @@ export default function Dashboard() {
           seoDescription: savedBlog.seoDescription || "",
           seoOgImage: savedBlog.seoOgImage || "",
           template: savedBlog.template || "",
-          marginLeft: savedBlog.marginLeft ?? 0,
-          marginRight: savedBlog.marginRight ?? 0,
         });
         slugManuallyEditedRef.current = false;
 
@@ -855,8 +838,6 @@ export default function Dashboard() {
       seoDescription: "",
       seoOgImage: "",
       template: "",
-      marginLeft: 0,
-      marginRight: 0,
     });
     setBlogFormDirty(false);
     slugManuallyEditedRef.current = false;
@@ -881,8 +862,6 @@ export default function Dashboard() {
         seoDescription: result.seoDescription || "",
         seoOgImage: "",
         template: result.template,
-        marginLeft: 0,
-        marginRight: 0,
       });
       setBlogFormDirty(false);
       slugManuallyEditedRef.current = false;
@@ -915,8 +894,6 @@ export default function Dashboard() {
         seoDescription: "",
         seoOgImage: "",
         template: "",
-        marginLeft: 0,
-        marginRight: 0,
       });
       setBlogFormDirty(true);
       slugManuallyEditedRef.current = false;
@@ -952,7 +929,10 @@ export default function Dashboard() {
       });
       const json = await res.json();
       if (!res.ok) {
-        setBlogMessage({ type: "error", text: json.error || "Failed to convert text to HTML." });
+        setBlogMessage({
+          type: "error",
+          text: json.error || "Failed to convert text to HTML.",
+        });
         return;
       }
 
@@ -966,7 +946,10 @@ export default function Dashboard() {
         text: "Converted! Review the formatted content below, then publish whenever you're ready.",
       });
     } catch (err) {
-      setBlogMessage({ type: "error", text: "Network error while converting." });
+      setBlogMessage({
+        type: "error",
+        text: "Network error while converting.",
+      });
     } finally {
       setQuickConverting(false);
     }
@@ -1009,11 +992,12 @@ export default function Dashboard() {
           seoDescription: fresh.seoDescription || "",
           seoOgImage: fresh.seoOgImage || "",
           template: fresh.template || "",
-          marginLeft: fresh.marginLeft ?? 0,
-          marginRight: fresh.marginRight ?? 0,
         });
       } catch (err) {
-        console.warn("Failed to fetch fresh post for editing, using cached copy:", err);
+        console.warn(
+          "Failed to fetch fresh post for editing, using cached copy:",
+          err,
+        );
         setBlogForm({
           title: blog.title || "",
           slug: blog.slug || "",
@@ -1027,8 +1011,6 @@ export default function Dashboard() {
           seoDescription: blog.seoDescription || "",
           seoOgImage: blog.seoOgImage || "",
           template: blog.template || "",
-          marginLeft: blog.marginLeft ?? 0,
-          marginRight: blog.marginRight ?? 0,
         });
       }
       setBlogFormDirty(false);
@@ -2023,7 +2005,9 @@ export default function Dashboard() {
                           <BlogEditor
                             key={formLoadId}
                             value={blogForm.content || ""}
-                            onChange={(html) => updateBlogForm({ content: html })}
+                            onChange={(html) =>
+                              updateBlogForm({ content: html })
+                            }
                             siteId={selectedSite}
                           />
                         </div>
@@ -2042,9 +2026,6 @@ export default function Dashboard() {
                               <label className="text-[10px] font-semibold text-slate-400">
                                 Left Margin
                               </label>
-                              <span className="text-[10px] font-mono text-indigo-400">
-                                {blogForm.marginLeft ?? 0}px
-                              </span>
                             </div>
                             <div className="flex items-center gap-2">
                               <input
@@ -2052,20 +2033,12 @@ export default function Dashboard() {
                                 min={0}
                                 max={160}
                                 step={4}
-                                value={blogForm.marginLeft ?? 0}
-                                onChange={(e) =>
-                                  updateBlogForm({ marginLeft: Number(e.target.value) })
-                                }
                                 className="flex-1 accent-indigo-600"
                               />
                               <input
                                 type="number"
                                 min={0}
                                 max={160}
-                                value={blogForm.marginLeft ?? 0}
-                                onChange={(e) =>
-                                  updateBlogForm({ marginLeft: Number(e.target.value) || 0 })
-                                }
                                 className="w-16 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500"
                               />
                             </div>
@@ -2075,9 +2048,6 @@ export default function Dashboard() {
                               <label className="text-[10px] font-semibold text-slate-400">
                                 Right Margin
                               </label>
-                              <span className="text-[10px] font-mono text-indigo-400">
-                                {blogForm.marginRight ?? 0}px
-                              </span>
                             </div>
                             <div className="flex items-center gap-2">
                               <input
@@ -2085,34 +2055,29 @@ export default function Dashboard() {
                                 min={0}
                                 max={160}
                                 step={4}
-                                value={blogForm.marginRight ?? 0}
-                                onChange={(e) =>
-                                  updateBlogForm({ marginRight: Number(e.target.value) })
-                                }
                                 className="flex-1 accent-indigo-600"
                               />
                               <input
                                 type="number"
                                 min={0}
                                 max={160}
-                                value={blogForm.marginRight ?? 0}
-                                onChange={(e) =>
-                                  updateBlogForm({ marginRight: Number(e.target.value) || 0 })
-                                }
                                 className="w-16 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500"
                               />
                             </div>
                           </div>
                           <p className="text-[10px] text-slate-500">
-                            Adds breathing room on the sides of this post on the live site.
-                            Drag the sliders and watch the preview update on the right.
+                            Adds breathing room on the sides of this post on the
+                            live site. Drag the sliders and watch the preview
+                            update on the right.
                           </p>
                         </div>
                         <div className="lg:col-span-3">
                           <div className="flex justify-end mb-1.5">
                             <button
                               type="button"
-                              onClick={() => previewIframeRef.current?.requestFullscreen()}
+                              onClick={() =>
+                                previewIframeRef.current?.requestFullscreen()
+                              }
                               className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 hover:text-indigo-400 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 transition-colors"
                             >
                               <Maximize2 className="h-3 w-3" />
@@ -2130,8 +2095,6 @@ export default function Dashboard() {
                                   type: "BLOG_PREVIEW_UPDATE",
                                   title: blogForm.title || "",
                                   html: blogForm.content || "",
-                                  marginLeft: blogForm.marginLeft ?? 0,
-                                  marginRight: blogForm.marginRight ?? 0,
                                   siteId: selectedSite,
                                 },
                                 window.location.origin,
@@ -2148,8 +2111,9 @@ export default function Dashboard() {
                         Quick Compose: Text + Images → Blog HTML
                       </h4>
                       <p className="text-[10px] text-slate-500">
-                        Write or paste your article text, add any images, and we&apos;ll turn it
-                        into formatted blog content below — no typing HTML required.
+                        Write or paste your article text, add any images, and
+                        we&apos;ll turn it into formatted blog content below —
+                        no typing HTML required.
                       </p>
                       <textarea
                         rows={6}
@@ -2180,7 +2144,9 @@ export default function Dashboard() {
                           disabled={quickConverting || !quickText.trim()}
                           className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold px-3.5 py-2 rounded-lg transition-colors"
                         >
-                          {quickConverting ? "Converting..." : "Convert to Blog HTML"}
+                          {quickConverting
+                            ? "Converting..."
+                            : "Convert to Blog HTML"}
                         </button>
                       </div>
                     </div>

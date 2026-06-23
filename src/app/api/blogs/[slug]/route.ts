@@ -1,21 +1,11 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { wrapContentWithMargins, unwrapContentMargins } from '@/lib/marginWrapper';
 
-// GET /api/blogs/[slug]?siteId=...&forEditing=true
-//
-// `content` is stored WRAPPED with the post's margin padding (see
-// marginWrapper.ts) so public sites like gotolatest, which render it via
-// dangerouslySetInnerHTML unmodified, pick up the margin automatically.
-// The CMS editor must never see that wrapper, so it passes `forEditing=true`
-// to get the plain, unwrapped HTML back instead. Do not drop this branch —
-// it's the one thing keeping the two consumers of this endpoint from
-// stepping on each other.
+// GET /api/blogs/[slug]?siteId=...
 export async function GET(request: Request, { params }: { params: Promise<{ slug: string }> }) {
   try {
     const { searchParams } = new URL(request.url);
     const siteId = searchParams.get('siteId');
-    const forEditing = searchParams.get('forEditing') === 'true';
     const slug = (await params).slug;
 
     if (!siteId) {
@@ -33,10 +23,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
 
     if (!blog) {
       return NextResponse.json({ error: 'Blog post not found' }, { status: 404 });
-    }
-
-    if (forEditing) {
-      return NextResponse.json({ ...blog, content: unwrapContentMargins(blog.content) });
     }
 
     return NextResponse.json(blog);
@@ -66,8 +52,6 @@ export async function PUT(request: Request, { params }: { params: Promise<{ slug
       seoTitle,
       seoDescription,
       seoOgImage,
-      marginLeft,
-      marginRight,
     } = body;
 
     if (!siteId) {
@@ -108,13 +92,6 @@ export async function PUT(request: Request, { params }: { params: Promise<{ slug
       }
     }
 
-    const effectiveMarginLeft = marginLeft ?? blog.marginLeft;
-    const effectiveMarginRight = marginRight ?? blog.marginRight;
-    const marginsChanged = marginLeft !== undefined || marginRight !== undefined;
-    // Re-wrap if either the content or the margins changed, so a margin-only
-    // edit still re-applies to the (possibly unchanged) existing content.
-    const baseContent = content !== undefined ? content : unwrapContentMargins(blog.content);
-
     const updatedBlog = await prisma.blog.update({
       where: {
         siteId_slug: {
@@ -125,10 +102,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ slug
       data: {
         title,
         slug: newSlug || oldSlug,
-        content:
-          content !== undefined || marginsChanged
-            ? wrapContentWithMargins(baseContent, effectiveMarginLeft, effectiveMarginRight)
-            : undefined,
+        content,
         summary,
         featuredImage,
         published,
@@ -138,8 +112,6 @@ export async function PUT(request: Request, { params }: { params: Promise<{ slug
         seoTitle,
         seoDescription,
         seoOgImage,
-        marginLeft: marginLeft ?? undefined,
-        marginRight: marginRight ?? undefined,
       },
     });
 

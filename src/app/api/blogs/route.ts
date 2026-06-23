@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { wrapContentWithMargins } from '@/lib/marginWrapper';
 
 // GET /api/blogs?siteId=...&category=...&limit=...&page=...&publishedOnly=...
 export async function GET(request: Request) {
@@ -69,8 +68,6 @@ export async function POST(request: Request) {
       seoTitle,
       seoDescription,
       seoOgImage,
-      marginLeft,
-      marginRight,
     } = body;
 
     if (!siteId || !title || !slug) {
@@ -100,7 +97,7 @@ export async function POST(request: Request) {
         siteId,
         title,
         slug,
-        content: wrapContentWithMargins(content, marginLeft ?? 0, marginRight ?? 0),
+        content,
         summary,
         featuredImage,
         published: published ?? false,
@@ -110,8 +107,6 @@ export async function POST(request: Request) {
         seoTitle,
         seoDescription,
         seoOgImage,
-        marginLeft: marginLeft ?? 0,
-        marginRight: marginRight ?? 0,
         publishedAt: new Date(),
       },
     });
