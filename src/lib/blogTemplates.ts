@@ -55,6 +55,17 @@ export const TONE_OPTIONS = [
 ] as const;
 export type ToneId = typeof TONE_OPTIONS[number]['id'];
 
+// Visual style presets for the "Modify with AI" feature (restyling existing
+// blog HTML) — distinct from TONE_OPTIONS, which describes the writing voice.
+export const LOOK_OPTIONS = [
+  { id: 'minimal', label: 'Minimal & Clean', description: 'Lots of white space, simple typography, subtle accents' },
+  { id: 'bold', label: 'Bold & Modern', description: 'Big headings, strong colors, high contrast' },
+  { id: 'editorial', label: 'Magazine & Editorial', description: 'Pull quotes, elegant emphasis, polished article feel' },
+  { id: 'friendly', label: 'Warm & Friendly', description: 'Soft colors, rounded callouts, approachable layout' },
+  { id: 'corporate', label: 'Professional & Corporate', description: 'Structured sections, formal spacing, business tone' },
+] as const;
+export type LookId = typeof LOOK_OPTIONS[number]['id'];
+
 export const LENGTH_OPTIONS = [
   { id: 'short', label: 'Short (~500 words)', wordTarget: 500 },
   { id: 'medium', label: 'Medium (~900 words)', wordTarget: 900 },

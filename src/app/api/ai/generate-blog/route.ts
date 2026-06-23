@@ -9,38 +9,9 @@ import {
   ToneId,
   LengthId,
 } from '@/lib/blogTemplates';
+import { callGemini } from '@/lib/gemini';
 
-const GEMINI_MODEL = 'gemini-2.5-flash-lite';
 const VALID_TEMPLATE_IDS = TEMPLATE_OPTIONS.map(t => t.id);
-
-async function callGemini(apiKey: string, systemInstruction: string, userPrompt: string, responseSchema: object) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: `${systemInstruction}\n\nInput: ${userPrompt}` }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema,
-        },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API request failed: ${errText}`);
-  }
-
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error('No output received from AI model');
-  }
-  return JSON.parse(text.trim());
-}
 
 function buildSystemInstruction(template: TemplateId, tone: ToneId, length: LengthId, category?: string) {
   const toneOpt = TONE_OPTIONS.find(t => t.id === tone) ?? TONE_OPTIONS[0];

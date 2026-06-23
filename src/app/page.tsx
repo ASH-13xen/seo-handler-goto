@@ -1,4 +1,4 @@
-/* eslint-disable react-hooks/refs */
+﻿/* eslint-disable react-hooks/refs */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable react/no-unescaped-entities */
 /* eslint-disable react-hooks/immutability */
@@ -28,15 +28,16 @@ import {
   Upload,
   Maximize2,
   Minimize2,
-  Link as LinkIcon,
-  Strikethrough,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-  Undo,
-  Redo,
+  FileUp,
+  Wand2,
 } from "lucide-react";
 import BlogAIWizard, { BlogAIWizardResult } from "@/components/BlogAIWizard";
+import BlogEditor from "@/components/BlogEditor";
+import ImportDocumentModal, {
+  ImportDocumentResult,
+} from "@/components/ImportDocumentModal";
+import ModifyHtmlModal from "@/components/ModifyHtmlModal";
+import { slugify } from "@/lib/slugify";
 
 interface SiteStats {
   id: string;
@@ -86,6 +87,8 @@ interface BlogPost {
   seoOgImage: string;
   template?: string;
   publishedAt: string;
+  marginLeft: number;
+  marginRight: number;
 }
 
 interface RedirectRule {
@@ -166,37 +169,35 @@ export default function Dashboard() {
     seoDescription: "",
     seoOgImage: "",
     template: "",
+    marginLeft: 0,
+    marginRight: 0,
   });
   const [blogMessage, setBlogMessage] = useState<{
     type: "success" | "error";
     text: string;
   } | null>(null);
   const [showAiWizard, setShowAiWizard] = useState<boolean>(false);
+  const [showImportModal, setShowImportModal] = useState<boolean>(false);
+  const [showModifyModal, setShowModifyModal] = useState<boolean>(false);
+  // Bumped whenever blogForm.content is replaced wholesale (new post, AI
+  // generation, document import, selecting a different post, or switching
+  // back from Raw HTML mode) — remounts BlogEditor via `key` so it loads the
+  // new content cleanly instead of fighting live typing with a sync effect.
+  const [formLoadId, setFormLoadId] = useState<number>(0);
+  // Quick Compose: plain text + image uploads -> blog HTML
+  const [quickText, setQuickText] = useState<string>("");
+  const [quickImages, setQuickImages] = useState<File[]>([]);
+  const [quickConverting, setQuickConverting] = useState<boolean>(false);
   const [contentViewMode, setContentViewMode] = useState<"raw" | "preview">(
     "raw",
   );
-  const [selectedEditorImage, setSelectedEditorImage] =
-    useState<HTMLImageElement | null>(null);
   const [blogFormDirty, setBlogFormDirty] = useState<boolean>(false);
-  const [historyCounter, setHistoryCounter] = useState<number>(0);
-  const editorRef = useRef<HTMLDivElement | null>(null);
-  const savedRangeRef = useRef<Range | null>(null);
-
-  // Undo/Redo history stack
-  const undoStackRef = useRef<string[]>([]);
-  const redoStackRef = useRef<string[]>([]);
-  const lastSnapshotRef = useRef<string>("");
-  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Manual slug flag
   const slugManuallyEditedRef = useRef<boolean>(false);
 
-  // Pointer drag states for image repositioning
-  const dragImageRef = useRef<HTMLImageElement | null>(null);
-  const dragStartPosRef = useRef<{ x: number; y: number } | null>(null);
-  const isDraggingRef = useRef<boolean>(false);
-  const dropIndicatorRef = useRef<HTMLDivElement | null>(null);
-  const targetRangeRef = useRef<Range | null>(null);
+  // Live preview iframe (src/app/preview/blog/page.tsx)
+  const previewIframeRef = useRef<HTMLIFrameElement>(null);
 
   // AI Assistant State
   const [aiPrompt, setAiPrompt] = useState<string>("");
@@ -331,17 +332,32 @@ export default function Dashboard() {
     };
   }, [blogFormDirty]);
 
-  // Synchronize editor innerHTML when content mode changes or content is updated externally
+  // Push the current draft to the live preview iframe. Debounced on content
+  // since Tiptap's onUpdate fires per keystroke; margin/title changes are
+  // cheap enough to post immediately.
   useEffect(() => {
-    if (contentViewMode === "preview" && editorRef.current) {
-      if (
-        document.activeElement !== editorRef.current &&
-        editorRef.current.innerHTML !== (blogForm.content || "")
-      ) {
-        editorRef.current.innerHTML = blogForm.content || "";
-      }
-    }
-  }, [contentViewMode, blogForm.content]);
+    const post = () => {
+      previewIframeRef.current?.contentWindow?.postMessage(
+        {
+          type: "BLOG_PREVIEW_UPDATE",
+          title: blogForm.title || "",
+          html: blogForm.content || "",
+          marginLeft: blogForm.marginLeft ?? 0,
+          marginRight: blogForm.marginRight ?? 0,
+          siteId: selectedSite,
+        },
+        window.location.origin,
+      );
+    };
+    const timer = setTimeout(post, 300);
+    return () => clearTimeout(timer);
+  }, [
+    blogForm.content,
+    blogForm.title,
+    blogForm.marginLeft,
+    blogForm.marginRight,
+    selectedSite,
+  ]);
 
   // Fetch Global Stats
   const fetchStats = async () => {
@@ -521,19 +537,11 @@ export default function Dashboard() {
     e.preventDefault();
     setBlogMessage(null);
 
-    // Strip empty zero-width-space spans from content before saving
-    let sanitizedContent = blogForm.content || "";
-    if (typeof window !== "undefined") {
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = sanitizedContent;
-      tempDiv.querySelectorAll("span").forEach((span) => {
-        const text = span.textContent || "";
-        if (text === "" || text === "\u200B") {
-          span.remove();
-        }
-      });
-      sanitizedContent = tempDiv.innerHTML;
-    }
+    // Imported DOCX/PDF content is already sanitized server-side at import
+    // time (see sanitizeHtml.ts). AI-generated content includes its own
+    // self-contained <style> block (blogTemplates.ts) that a generic
+    // allowlist would strip, so this save path is left as-is.
+    const sanitizedContent = blogForm.content || "";
 
     if (!sanitizedContent || !sanitizedContent.trim()) {
       setBlogMessage({
@@ -576,7 +584,10 @@ export default function Dashboard() {
           title: savedBlog.title || "",
           slug: savedBlog.slug || "",
           summary: savedBlog.summary || "",
-          content: savedBlog.content || "",
+          // The server wraps `content` with the margin-padding div before
+          // persisting/returning it (see marginWrapper.ts) — the editor must
+          // keep working with the plain, unwrapped HTML it already has.
+          content: sanitizedContent,
           featuredImage: savedBlog.featuredImage || "",
           published: savedBlog.published || false,
           category: savedBlog.category || "",
@@ -585,10 +596,9 @@ export default function Dashboard() {
           seoDescription: savedBlog.seoDescription || "",
           seoOgImage: savedBlog.seoOgImage || "",
           template: savedBlog.template || "",
+          marginLeft: savedBlog.marginLeft ?? 0,
+          marginRight: savedBlog.marginRight ?? 0,
         });
-        lastSnapshotRef.current = savedBlog.content || "";
-        undoStackRef.current = [];
-        redoStackRef.current = [];
         slugManuallyEditedRef.current = false;
 
         fetchBlogs(false); // Reload list without clearing form
@@ -770,11 +780,7 @@ export default function Dashboard() {
       if (slugManuallyEditedRef.current) {
         return { ...prev, title };
       }
-      const slug = title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "");
-      return { ...prev, title, slug };
+      return { ...prev, title, slug: slugify(title) };
     });
     setBlogFormDirty(true);
   };
@@ -807,128 +813,6 @@ export default function Dashboard() {
     });
   };
 
-  // Undo/Redo snapshot operations
-  const takeSnapshot = () => {
-    const currentHTML = editorRef.current?.innerHTML || "";
-    if (currentHTML === lastSnapshotRef.current) return;
-
-    undoStackRef.current.push(lastSnapshotRef.current);
-    if (undoStackRef.current.length > 50) {
-      undoStackRef.current.shift();
-    }
-    redoStackRef.current = [];
-    lastSnapshotRef.current = currentHTML;
-    setHistoryCounter((c) => c + 1);
-  };
-
-  const handleTypingActivity = () => {
-    if (typingTimerRef.current) {
-      clearTimeout(typingTimerRef.current);
-    }
-    typingTimerRef.current = setTimeout(() => {
-      takeSnapshot();
-    }, 500);
-  };
-
-  const handleUndo = () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    if (typingTimerRef.current) {
-      clearTimeout(typingTimerRef.current);
-    }
-
-    const currentHTML = editor.innerHTML;
-    if (currentHTML !== lastSnapshotRef.current) {
-      undoStackRef.current.push(lastSnapshotRef.current);
-      lastSnapshotRef.current = currentHTML;
-    }
-
-    if (undoStackRef.current.length === 0) return;
-
-    const previousHTML = undoStackRef.current.pop()!;
-    redoStackRef.current.push(currentHTML);
-    lastSnapshotRef.current = previousHTML;
-
-    editor.innerHTML = previousHTML;
-    placeCaretAtEnd(editor);
-    setBlogForm((prev) => ({ ...prev, content: previousHTML }));
-    setBlogFormDirty(true);
-    setHistoryCounter((c) => c + 1);
-  };
-
-  const handleRedo = () => {
-    const editor = editorRef.current;
-    if (!editor || redoStackRef.current.length === 0) return;
-
-    const nextHTML = redoStackRef.current.pop()!;
-    undoStackRef.current.push(lastSnapshotRef.current);
-    lastSnapshotRef.current = nextHTML;
-
-    editor.innerHTML = nextHTML;
-    placeCaretAtEnd(editor);
-    setBlogForm((prev) => ({ ...prev, content: nextHTML }));
-    setBlogFormDirty(true);
-    setHistoryCounter((c) => c + 1);
-  };
-
-  const placeCaretAtEnd = (el: HTMLElement) => {
-    el.focus();
-    if (
-      typeof window.getSelection !== "undefined" &&
-      typeof document.createRange !== "undefined"
-    ) {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      range.collapse(false);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-      savedRangeRef.current = range.cloneRange();
-    }
-  };
-
-  const handleEditorKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    const isMod = e.ctrlKey || e.metaKey;
-    if (isMod) {
-      if (e.key.toLowerCase() === "z") {
-        e.preventDefault();
-        if (e.shiftKey) {
-          handleRedo();
-        } else {
-          handleUndo();
-        }
-      } else if (e.key.toLowerCase() === "y") {
-        e.preventDefault();
-        handleRedo();
-      }
-    } else {
-      handleTypingActivity();
-    }
-    saveEditorSelection();
-  };
-
-  const handleEditorPaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    takeSnapshot();
-    const text = e.clipboardData.getData("text/plain");
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-    range.deleteContents();
-    const textNode = document.createTextNode(text);
-    range.insertNode(textNode);
-
-    const newRange = document.createRange();
-    newRange.setStartAfter(textNode);
-    newRange.collapse(true);
-    sel.removeAllRanges();
-    sel.addRange(newRange);
-    savedRangeRef.current = newRange.cloneRange();
-
-    syncEditorContent();
-  };
-
   const handleTabChange = (
     tabName:
       | "overview"
@@ -942,167 +826,6 @@ export default function Dashboard() {
       confirmDiscardIfDirty(() => setActiveTab(tabName));
     } else {
       setActiveTab(tabName);
-    }
-  };
-
-  const handleEditorPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const target = e.target as HTMLElement;
-    if (
-      target.tagName === "IMG" &&
-      target.classList.contains("editable-blog-image")
-    ) {
-      e.preventDefault();
-      dragImageRef.current = target as HTMLImageElement;
-      dragStartPosRef.current = { x: e.clientX, y: e.clientY };
-      isDraggingRef.current = false;
-      target.setPointerCapture(e.pointerId);
-    }
-  };
-
-  const handleEditorPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragImageRef.current || !dragStartPosRef.current) return;
-    const dx = e.clientX - dragStartPosRef.current.x;
-    const dy = e.clientY - dragStartPosRef.current.y;
-    if (!isDraggingRef.current && Math.sqrt(dx * dx + dy * dy) > 5) {
-      isDraggingRef.current = true;
-      dragImageRef.current.style.opacity = "0.5";
-    }
-
-    if (isDraggingRef.current) {
-      e.preventDefault();
-      let range: Range | null = null;
-      if (document.caretRangeFromPoint) {
-        range = document.caretRangeFromPoint(e.clientX, e.clientY);
-      } else if ((document as any).caretPositionFromPoint) {
-        const pos = (document as any).caretPositionFromPoint(
-          e.clientX,
-          e.clientY,
-        );
-        if (pos) {
-          range = document.createRange();
-          range.setStart(pos.offsetNode, pos.offset);
-          range.collapse(true);
-        }
-      }
-
-      if (range && editorRef.current?.contains(range.startContainer)) {
-        const sel = window.getSelection();
-        if (sel) {
-          sel.removeAllRanges();
-          sel.addRange(range);
-          targetRangeRef.current = range;
-        }
-      }
-    }
-  };
-
-  const handleEditorPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragImageRef.current) return;
-    dragImageRef.current.releasePointerCapture(e.pointerId);
-    dragImageRef.current.style.opacity = "";
-
-    if (isDraggingRef.current && targetRangeRef.current && editorRef.current) {
-      takeSnapshot();
-
-      const sibling = dragImageRef.current.nextSibling;
-      if (
-        sibling &&
-        sibling.nodeType === Node.TEXT_NODE &&
-        sibling.textContent === "\u00A0"
-      ) {
-        sibling.remove();
-      }
-      dragImageRef.current.remove();
-
-      targetRangeRef.current.insertNode(dragImageRef.current);
-      const anchor = document.createTextNode("\u00A0");
-      dragImageRef.current.after(anchor);
-
-      const newRange = document.createRange();
-      newRange.setStartAfter(anchor);
-      newRange.collapse(true);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(newRange);
-      savedRangeRef.current = newRange.cloneRange();
-
-      syncEditorContent();
-    }
-
-    dragImageRef.current = null;
-    dragStartPosRef.current = null;
-    isDraggingRef.current = false;
-    targetRangeRef.current = null;
-  };
-
-  const handleEditorPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (dragImageRef.current) {
-      dragImageRef.current.releasePointerCapture(e.pointerId);
-      dragImageRef.current.style.opacity = "";
-    }
-    dragImageRef.current = null;
-    dragStartPosRef.current = null;
-    isDraggingRef.current = false;
-    targetRangeRef.current = null;
-  };
-
-  const handleEditorDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const applyCollapsedStyle = (
-    styleName: "fontSize" | "fontFamily" | "color",
-    value: string,
-    range: Range,
-    sel: Selection,
-  ) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    let parentSpan: HTMLSpanElement | null = null;
-    let node: Node | null = range.startContainer;
-    while (node && node !== editor) {
-      if (
-        node.nodeType === Node.ELEMENT_NODE &&
-        (node as HTMLElement).tagName === "SPAN"
-      ) {
-        const text = node.textContent || "";
-        if (text === "" || text === "\u200B") {
-          parentSpan = node as HTMLSpanElement;
-          break;
-        }
-      }
-      node = node.parentNode;
-    }
-
-    if (parentSpan) {
-      if (styleName === "fontSize") {
-        parentSpan.style.fontSize = value;
-      } else if (styleName === "fontFamily") {
-        parentSpan.style.fontFamily = value;
-      } else if (styleName === "color") {
-        parentSpan.style.color = value;
-      }
-      syncEditorContent();
-    } else {
-      const span = document.createElement("span");
-      if (styleName === "fontSize") {
-        span.style.fontSize = value;
-      } else if (styleName === "fontFamily") {
-        span.style.fontFamily = value;
-      } else if (styleName === "color") {
-        span.style.color = value;
-      }
-      span.innerHTML = "&#8203;"; // Zero-width space
-      range.insertNode(span);
-
-      const newRange = document.createRange();
-      newRange.setStart(span.firstChild!, 1);
-      newRange.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(newRange);
-      savedRangeRef.current = newRange.cloneRange();
-      syncEditorContent();
     }
   };
 
@@ -1132,16 +855,13 @@ export default function Dashboard() {
       seoDescription: "",
       seoOgImage: "",
       template: "",
+      marginLeft: 0,
+      marginRight: 0,
     });
     setBlogFormDirty(false);
     slugManuallyEditedRef.current = false;
-    undoStackRef.current = [];
-    redoStackRef.current = [];
-    lastSnapshotRef.current = "";
     setContentViewMode("raw");
-    setSelectedEditorImage(null);
-    savedRangeRef.current = null;
-    setHistoryCounter((c) => c + 1);
+    setFormLoadId((id) => id + 1);
   };
 
   // Apply AI-generated blog (from the wizard) to the editor form
@@ -1161,15 +881,13 @@ export default function Dashboard() {
         seoDescription: result.seoDescription || "",
         seoOgImage: "",
         template: result.template,
+        marginLeft: 0,
+        marginRight: 0,
       });
       setBlogFormDirty(false);
       slugManuallyEditedRef.current = false;
-      undoStackRef.current = [];
-      redoStackRef.current = [];
-      lastSnapshotRef.current = result.content || "";
       setContentViewMode("preview");
-      setSelectedEditorImage(null);
-      savedRangeRef.current = null;
+      setFormLoadId((id) => id + 1);
       setShowAiWizard(false);
       setBlogMessage({
         type: "success",
@@ -1177,368 +895,148 @@ export default function Dashboard() {
           ? `Draft generated! Suggested image search: "${result.imageSuggestion.query}" (alt text: "${result.imageSuggestion.alt}") — paste a URL into Featured Image above.`
           : "Draft generated! Review and edit below, then publish whenever you're ready.",
       });
-      setHistoryCounter((c) => c + 1);
     });
   };
 
-  const selectBlogForEdit = (blog: BlogPost) => {
+  // Apply an imported DOCX/PDF document's converted content to the editor form
+  const handleDocumentImported = (result: ImportDocumentResult) => {
     confirmDiscardIfDirty(() => {
-      setSelectedBlog(blog);
+      setSelectedBlog(null);
       setBlogForm({
-        title: blog.title || "",
-        slug: blog.slug || "",
-        summary: blog.summary || "",
-        content: blog.content || "",
-        featuredImage: blog.featuredImage || "",
-        published: blog.published || false,
-        category: blog.category || "",
-        tags: blog.tags || "",
-        seoTitle: blog.seoTitle || "",
-        seoDescription: blog.seoDescription || "",
-        seoOgImage: blog.seoOgImage || "",
-        template: blog.template || "",
+        title: result.title || "",
+        slug: slugify(result.title || ""),
+        summary: "",
+        content: result.html || "",
+        featuredImage: "",
+        published: false,
+        category: "",
+        tags: "",
+        seoTitle: "",
+        seoDescription: "",
+        seoOgImage: "",
+        template: "",
+        marginLeft: 0,
+        marginRight: 0,
       });
-      setBlogFormDirty(false);
+      setBlogFormDirty(true);
       slugManuallyEditedRef.current = false;
-      undoStackRef.current = [];
-      redoStackRef.current = [];
-      lastSnapshotRef.current = blog.content || "";
-      setContentViewMode("raw");
-      setSelectedEditorImage(null);
-      savedRangeRef.current = null;
-      setAiPrompt(blog.title || "");
-      setHistoryCounter((c) => c + 1);
+      setContentViewMode("preview");
+      setFormLoadId((id) => id + 1);
+      setShowImportModal(false);
+      setBlogMessage({
+        type: "success",
+        text:
+          result.warnings.length > 0
+            ? `Document imported! ${result.warnings.join(" ")} Review below, then publish whenever you're ready.`
+            : "Document imported! Review below, then publish whenever you're ready.",
+      });
     });
   };
 
-  // Save the editor's current cursor/selection position so it survives async
-  // gaps (like the native file picker dialog) that would otherwise clear it.
-  const saveEditorSelection = () => {
-    const sel = window.getSelection();
-    if (
-      sel &&
-      sel.rangeCount > 0 &&
-      editorRef.current &&
-      editorRef.current.contains(sel.anchorNode)
-    ) {
-      savedRangeRef.current = sel.getRangeAt(0).cloneRange();
-    }
-  };
-
-  // Every toolbar control lives outside the contentEditable, so clicking it
-  // moves DOM focus away first. For simple buttons the browser usually keeps
-  // the text selection alive, but native pickers (file input, <input
-  // type="color">) hand off to an OS-level surface that can clear it
-  // entirely. Restoring the last known-good range before running the
-  // formatting command makes every toolbar action work regardless of which
-  // case actually triggered it.
-  const withEditorSelection = (action: () => void) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.focus();
-    const sel = window.getSelection();
-    if (
-      savedRangeRef.current &&
-      editor.contains(savedRangeRef.current.startContainer)
-    ) {
-      sel?.removeAllRanges();
-      sel?.addRange(savedRangeRef.current);
-    }
-    action();
-    saveEditorSelection();
-    syncEditorContent();
-  };
-
-  const getEditorImageAlign = (
-    img: HTMLImageElement,
-  ): "left" | "center" | "right" =>
-    (img.dataset.ebAlign as "left" | "center" | "right") || "center";
-  const getEditorImageWidth = (img: HTMLImageElement): number =>
-    Number(img.dataset.ebWidth) || 60;
-
-  const restyleEditorImage = (
-    img: HTMLImageElement,
-    align: "left" | "center" | "right",
-    widthPct: number,
-  ) => {
-    img.dataset.ebAlign = align;
-    img.dataset.ebWidth = String(widthPct);
-    const base = "border-radius:8px; max-width:100%; height:auto;";
-    if (align === "left") {
-      img.style.cssText = `${base} float:left; width:${widthPct}%; margin:6px 20px 14px 0;`;
-    } else if (align === "right") {
-      img.style.cssText = `${base} float:right; width:${widthPct}%; margin:6px 0 14px 20px;`;
-    } else {
-      img.style.cssText = `${base} display:block; margin:18px auto; width:${widthPct}%;`;
-    }
-  };
-
-  const syncEditorContent = () => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    // Get current selection parent node
-    const sel = typeof window !== "undefined" ? window.getSelection() : null;
-    let cursorNode: Node | null = null;
-    if (sel && sel.rangeCount > 0) {
-      cursorNode = sel.getRangeAt(0).startContainer;
-    }
-
-    // Clean up empty styled spans where the cursor is NOT active
-    editor.querySelectorAll("span").forEach((span) => {
-      const text = span.textContent || "";
-      if (text === "" || text === "\u200B") {
-        if (cursorNode && (span === cursorNode || span.contains(cursorNode))) {
-          return;
-        }
-        span.remove();
-      }
-    });
-
-    setBlogForm((prev) => ({
-      ...prev,
-      content: editor.innerHTML,
-    }));
-    setBlogFormDirty(true);
-  };
-
-  const applyEditorImageAlign = (align: "left" | "center" | "right") => {
-    if (!selectedEditorImage) return;
-    takeSnapshot();
-    restyleEditorImage(
-      selectedEditorImage,
-      align,
-      getEditorImageWidth(selectedEditorImage),
-    );
-    syncEditorContent();
-  };
-
-  const applyEditorImageWidth = (pct: number) => {
-    if (!selectedEditorImage) return;
-    takeSnapshot();
-    restyleEditorImage(
-      selectedEditorImage,
-      getEditorImageAlign(selectedEditorImage),
-      pct,
-    );
-    syncEditorContent();
-  };
-
-  const removeEditorImage = () => {
-    if (!selectedEditorImage) return;
-    takeSnapshot();
-    const sibling = selectedEditorImage.nextSibling;
-    if (
-      sibling &&
-      sibling.nodeType === Node.TEXT_NODE &&
-      sibling.textContent === "\u00A0"
-    ) {
-      sibling.remove();
-    }
-    selectedEditorImage.remove();
-    setSelectedEditorImage(null);
-    syncEditorContent();
-  };
-
-  const editEditorImageAlt = () => {
-    if (!selectedEditorImage) return;
-    const currentAlt = selectedEditorImage.alt || "";
-    const newAlt = window.prompt(
-      "Descriptive image alt text (for SEO/Accessibility):",
-      currentAlt,
-    );
-    if (newAlt !== null) {
-      takeSnapshot();
-      selectedEditorImage.alt = newAlt.trim();
-      syncEditorContent();
-    }
-  };
-
-  const replaceEditorImage = async (file: File) => {
-    if (!selectedEditorImage) return;
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("siteId", selectedSite || "general");
-
+  // Quick Compose: converts plain text + uploaded images straight into blog
+  // HTML and drops it into the content field (content only — title/slug/etc
+  // are left as-is, unlike the AI/import flows which replace the whole form).
+  const handleQuickCompose = async () => {
+    if (!quickText.trim()) return;
+    setQuickConverting(true);
+    setBlogMessage(null);
     try {
-      const res = await fetch("/api/upload", {
+      const formData = new FormData();
+      formData.append("text", quickText);
+      formData.append("siteId", selectedSite || "general");
+      quickImages.forEach((file) => formData.append("images", file));
+
+      const res = await fetch("/api/blogs/import-text", {
         method: "POST",
         body: formData,
       });
-      if (res.ok) {
-        takeSnapshot();
-        const json = await res.json();
-        selectedEditorImage.src = json.url;
-        syncEditorContent();
-      } else {
-        alert("Failed to upload replacement image.");
+      const json = await res.json();
+      if (!res.ok) {
+        setBlogMessage({ type: "error", text: json.error || "Failed to convert text to HTML." });
+        return;
       }
+
+      updateBlogForm({ content: json.html });
+      setContentViewMode("preview");
+      setFormLoadId((id) => id + 1);
+      setQuickText("");
+      setQuickImages([]);
+      setBlogMessage({
+        type: "success",
+        text: "Converted! Review the formatted content below, then publish whenever you're ready.",
+      });
     } catch (err) {
-      console.error(err);
-      alert("Replacement upload error.");
+      setBlogMessage({ type: "error", text: "Network error while converting." });
+    } finally {
+      setQuickConverting(false);
     }
   };
 
-  const deselectEditorImage = () => {
-    if (selectedEditorImage) {
-      selectedEditorImage.style.outline = "";
-      selectedEditorImage.style.outlineOffset = "";
-    }
-    setSelectedEditorImage(null);
+  // Apply the AI-restyled HTML from ModifyHtmlModal back into the Raw HTML box.
+  const handleHtmlModified = (html: string) => {
+    updateBlogForm({ content: html });
+    setContentViewMode("preview");
+    setFormLoadId((id) => id + 1);
+    setShowModifyModal(false);
+    setBlogMessage({
+      type: "success",
+      text: "Look & feel updated! Review the content below, then publish whenever you're ready.",
+    });
   };
 
-  const selectEditorImage = (img: HTMLImageElement) => {
-    if (selectedEditorImage && selectedEditorImage !== img) {
-      selectedEditorImage.style.outline = "";
-      selectedEditorImage.style.outlineOffset = "";
-    }
-    img.style.outline = "3px solid #6366f1";
-    img.style.outlineOffset = "2px";
-    setSelectedEditorImage(img);
-  };
-
-  const insertEditorImage = (url: string, defaultAlt: string) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-
-    const altText =
-      window.prompt("Descriptive image alt text (for SEO/Accessibility):") ||
-      "";
-    const cleanAlt =
-      altText.trim() ||
-      defaultAlt
-        .replace(/\.[^/.]+$/, "")
-        .replace(/[-_]/g, " ")
-        .trim();
-
-    takeSnapshot();
-    editor.focus();
-    const sel = window.getSelection();
-    let range: Range;
-    if (
-      savedRangeRef.current &&
-      editor.contains(savedRangeRef.current.startContainer)
-    ) {
-      range = savedRangeRef.current;
-    } else {
-      range = document.createRange();
-      range.selectNodeContents(editor);
-      range.collapse(false);
-    }
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-
-    const img = document.createElement("img");
-    img.src = url;
-    img.alt = cleanAlt;
-    img.className = "editable-blog-image select-none cursor-pointer";
-    img.style.cursor = "grab";
-    restyleEditorImage(img, "center", 60);
-
-    range.deleteContents();
-    range.insertNode(img);
-
-    const anchor = document.createTextNode("\u00A0");
-    img.after(anchor);
-
-    const after = document.createRange();
-    after.setStartAfter(anchor);
-    after.collapse(true);
-    sel?.removeAllRanges();
-    sel?.addRange(after);
-    savedRangeRef.current = after.cloneRange();
-
-    syncEditorContent();
-    selectEditorImage(img);
-  };
-
-  const applyEditorFontSize = (px: string) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.focus();
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-
-    const range = sel.getRangeAt(0);
-
-    if (!range.collapsed) {
-      takeSnapshot();
-      withEditorSelection(() => {
-        document.execCommand("fontSize", false, "7");
-        editor.querySelectorAll('font[size="7"]').forEach((el) => {
-          const span = document.createElement("span");
-          span.style.fontSize = px;
-          span.innerHTML = el.innerHTML;
-          el.replaceWith(span);
+  // Fetches the post fresh (rather than reusing the list-cached copy, whose
+  // `content` is the margin-wrapped version meant for the public site) so the
+  // editor always receives the plain, unwrapped HTML — see marginWrapper.ts.
+  const selectBlogForEdit = async (blog: BlogPost) => {
+    confirmDiscardIfDirty(async () => {
+      setSelectedBlog(blog);
+      setAiPrompt(blog.title || "");
+      try {
+        const res = await fetch(
+          `/api/blogs/${blog.slug}?siteId=${selectedSite}&forEditing=true`,
+        );
+        const fresh = res.ok ? await res.json() : blog;
+        setBlogForm({
+          title: fresh.title || "",
+          slug: fresh.slug || "",
+          summary: fresh.summary || "",
+          content: fresh.content || "",
+          featuredImage: fresh.featuredImage || "",
+          published: fresh.published || false,
+          category: fresh.category || "",
+          tags: fresh.tags || "",
+          seoTitle: fresh.seoTitle || "",
+          seoDescription: fresh.seoDescription || "",
+          seoOgImage: fresh.seoOgImage || "",
+          template: fresh.template || "",
+          marginLeft: fresh.marginLeft ?? 0,
+          marginRight: fresh.marginRight ?? 0,
         });
-      });
-    } else {
-      applyCollapsedStyle("fontSize", px, range, sel);
-    }
-  };
-
-  const applyEditorFontFamily = (fontName: string) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.focus();
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-
-    const range = sel.getRangeAt(0);
-
-    if (!range.collapsed) {
-      takeSnapshot();
-      withEditorSelection(() => {
-        document.execCommand("fontName", false, fontName);
-        editor.querySelectorAll(`font[face="${fontName}"]`).forEach((el) => {
-          const span = document.createElement("span");
-          span.style.fontFamily = fontName;
-          span.innerHTML = el.innerHTML;
-          el.replaceWith(span);
+      } catch (err) {
+        console.warn("Failed to fetch fresh post for editing, using cached copy:", err);
+        setBlogForm({
+          title: blog.title || "",
+          slug: blog.slug || "",
+          summary: blog.summary || "",
+          content: blog.content || "",
+          featuredImage: blog.featuredImage || "",
+          published: blog.published || false,
+          category: blog.category || "",
+          tags: blog.tags || "",
+          seoTitle: blog.seoTitle || "",
+          seoDescription: blog.seoDescription || "",
+          seoOgImage: blog.seoOgImage || "",
+          template: blog.template || "",
+          marginLeft: blog.marginLeft ?? 0,
+          marginRight: blog.marginRight ?? 0,
         });
-      });
-    } else {
-      applyCollapsedStyle("fontFamily", fontName, range, sel);
-    }
+      }
+      setBlogFormDirty(false);
+      slugManuallyEditedRef.current = false;
+      setContentViewMode("raw");
+      setFormLoadId((id) => id + 1);
+    });
   };
-
-  const applyEditorTextColor = (color: string) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.focus();
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-
-    const range = sel.getRangeAt(0);
-
-    if (!range.collapsed) {
-      takeSnapshot();
-      withEditorSelection(() => {
-        document.execCommand("foreColor", false, color);
-        editor.querySelectorAll(`font[color="${color}"]`).forEach((el) => {
-          const span = document.createElement("span");
-          span.style.color = color;
-          span.innerHTML = el.innerHTML;
-          el.replaceWith(span);
-        });
-      });
-    } else {
-      applyCollapsedStyle("color", color, range, sel);
-    }
-  };
-
-  const applyEditorLink = () => {
-    saveEditorSelection();
-    const url = window.prompt(
-      "Link URL (e.g. https://example.com):",
-      "https://",
-    );
-    if (url) {
-      takeSnapshot();
-      withEditorSelection(() => document.execCommand("createLink", false, url));
-    }
-  };
-
   return (
     <div className="flex-1 flex flex-col md:flex-row h-screen overflow-hidden">
       {/* SIDEBAR NAVIGATION */}
@@ -2305,14 +1803,24 @@ export default function Dashboard() {
                         ? `Editing: ${selectedBlog.title}`
                         : "Draft New Article"}
                     </h3>
-                    <button
-                      type="button"
-                      onClick={() => setShowAiWizard(true)}
-                      className="flex items-center gap-1.5 text-xs bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold px-3.5 py-2 rounded-lg transition-colors shadow-md"
-                    >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      Generate with AI
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowImportModal(true)}
+                        className="flex items-center gap-1.5 text-xs bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-200 font-bold px-3.5 py-2 rounded-lg transition-colors"
+                      >
+                        <FileUp className="h-3.5 w-3.5" />
+                        Import Document
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowAiWizard(true)}
+                        className="flex items-center gap-1.5 text-xs bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold px-3.5 py-2 rounded-lg transition-colors shadow-md"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                        Generate with AI
+                      </button>
+                    </div>
                   </div>
 
                   {blogMessage && (
@@ -2463,7 +1971,12 @@ export default function Dashboard() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => setContentViewMode("preview")}
+                              onClick={() => {
+                                // Force BlogEditor to remount so it picks up
+                                // whatever was typed in the Raw HTML textarea.
+                                setFormLoadId((id) => id + 1);
+                                setContentViewMode("preview");
+                              }}
                               className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-colors ${
                                 contentViewMode === "preview"
                                   ? "bg-indigo-600 text-white"
@@ -2480,6 +1993,17 @@ export default function Dashboard() {
                             contentViewMode === "raw" ? "block" : "hidden"
                           }
                         >
+                          <div className="flex justify-end mb-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setShowModifyModal(true)}
+                              disabled={!blogForm.content?.trim()}
+                              className="flex items-center gap-1.5 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white px-2.5 py-1.5 rounded-lg transition-colors"
+                            >
+                              <Wand2 className="h-3 w-3" />
+                              Modify with AI
+                            </button>
+                          </div>
                           <textarea
                             rows={15}
                             required
@@ -2496,532 +2020,168 @@ export default function Dashboard() {
                             contentViewMode === "preview" ? "block" : "hidden"
                           }
                         >
-                          {(() => {
-                            const editorContent = (
-                              <div className="rounded-lg border border-slate-850 bg-white overflow-hidden flex flex-col">
-                                {/* Visual Editor Toolbar */}
-                                <div className="bg-slate-100 border-b border-slate-200 px-3 py-2 flex flex-wrap gap-1.5 items-center select-none shrink-0">
-                                  {/* Undo / Redo */}
-                                  <button
-                                    type="button"
-                                    title="Undo (Ctrl+Z)"
-                                    onClick={handleUndo}
-                                    disabled={undoStackRef.current.length === 0}
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white transition-colors shadow-sm"
-                                  >
-                                    <Undo className="h-3 w-3" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Redo (Ctrl+Y)"
-                                    onClick={handleRedo}
-                                    disabled={redoStackRef.current.length === 0}
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white transition-colors shadow-sm"
-                                  >
-                                    <Redo className="h-3 w-3" />
-                                  </button>
-                                  <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                                  {/* Bold, Italic, Underline */}
-                                  <button
-                                    type="button"
-                                    title="Bold (Ctrl+B)"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand("bold", false),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors font-bold text-xs shadow-sm"
-                                  >
-                                    B
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Italic (Ctrl+I)"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand("italic", false),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors italic text-xs shadow-sm"
-                                  >
-                                    I
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Underline (Ctrl+U)"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "underline",
-                                          false,
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors underline text-xs shadow-sm"
-                                  >
-                                    U
-                                  </button>
-                                  <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                                  {/* Headings */}
-                                  <button
-                                    type="button"
-                                    title="Heading 2"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "formatBlock",
-                                          false,
-                                          "<h2>",
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-black text-[10px] shadow-sm uppercase"
-                                  >
-                                    H2
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Heading 3"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "formatBlock",
-                                          false,
-                                          "<h3>",
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-800 hover:bg-slate-50 transition-colors font-bold text-[10px] shadow-sm uppercase"
-                                  >
-                                    H3
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Normal Paragraph"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "formatBlock",
-                                          false,
-                                          "<p>",
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
-                                  >
-                                    Paragraph
-                                  </button>
-                                  <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                                  {/* Lists */}
-                                  <button
-                                    type="button"
-                                    title="Unordered List"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "insertUnorderedList",
-                                          false,
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
-                                  >
-                                    • Bullet List
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Ordered List"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "insertOrderedList",
-                                          false,
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm"
-                                  >
-                                    1. Number List
-                                  </button>
-                                  <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                                  {/* Quote block */}
-                                  <button
-                                    type="button"
-                                    title="Blockquote"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "formatBlock",
-                                          false,
-                                          "<blockquote>",
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors text-[10px] shadow-sm italic font-semibold"
-                                  >
-                                    Quote
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Strikethrough"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "strikeThrough",
-                                          false,
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                                  >
-                                    <Strikethrough className="h-3 w-3" />
-                                  </button>
-                                  <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                                  {/* Alignment */}
-                                  <button
-                                    type="button"
-                                    title="Align Left"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "justifyLeft",
-                                          false,
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                                  >
-                                    <AlignLeft className="h-3 w-3" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Align Center"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "justifyCenter",
-                                          false,
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                                  >
-                                    <AlignCenter className="h-3 w-3" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    title="Align Right"
-                                    onClick={() =>
-                                      withEditorSelection(() =>
-                                        document.execCommand(
-                                          "justifyRight",
-                                          false,
-                                        ),
-                                      )
-                                    }
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                                  >
-                                    <AlignRight className="h-3 w-3" />
-                                  </button>
-                                  <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                                  {/* Font family */}
-                                  <select
-                                    title="Font family"
-                                    defaultValue=""
-                                    onChange={(e) => {
-                                      const font = e.target.value;
-                                      if (font) {
-                                        applyEditorFontFamily(font);
-                                      }
-                                      e.target.value = "";
-                                    }}
-                                    className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[90px]"
-                                  >
-                                    <option value="">Font</option>
-                                    <option value="Outfit, sans-serif">
-                                      Outfit
-                                    </option>
-                                    <option value="Arial, sans-serif">
-                                      Arial
-                                    </option>
-                                    <option value="Georgia, serif">
-                                      Georgia
-                                    </option>
-                                    <option value="'Times New Roman', serif">
-                                      Times New Roman
-                                    </option>
-                                    <option value="Verdana, sans-serif">
-                                      Verdana
-                                    </option>
-                                    <option value="'Courier New', monospace">
-                                      Courier New
-                                    </option>
-                                  </select>
-
-                                  {/* Font size */}
-                                  <select
-                                    title="Font size"
-                                    defaultValue=""
-                                    onChange={(e) => {
-                                      if (e.target.value) {
-                                        applyEditorFontSize(e.target.value);
-                                      }
-                                      e.target.value = "";
-                                    }}
-                                    className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 text-[10px] shadow-sm max-w-[70px]"
-                                  >
-                                    <option value="">Size</option>
-                                    <option value="12px">12px</option>
-                                    <option value="14px">14px</option>
-                                    <option value="16px">16px</option>
-                                    <option value="18px">18px</option>
-                                    <option value="24px">24px</option>
-                                    <option value="32px">32px</option>
-                                    <option value="48px">48px</option>
-                                  </select>
-
-                                  {/* Text color */}
-                                  <label
-                                    title="Text color"
-                                    className="px-1.5 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm cursor-pointer flex items-center"
-                                  >
-                                    <input
-                                      type="color"
-                                      defaultValue="#1e293b"
-                                      className="h-3.5 w-3.5 cursor-pointer border-none p-0 bg-transparent"
-                                      onMouseDown={saveEditorSelection}
-                                      onChange={(e) => {
-                                        const color = e.target.value;
-                                        applyEditorTextColor(color);
-                                      }}
-                                    />
-                                  </label>
-
-                                  {/* Link */}
-                                  <button
-                                    type="button"
-                                    title="Insert Link"
-                                    onClick={applyEditorLink}
-                                    className="px-2 py-1 rounded bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-colors shadow-sm"
-                                  >
-                                    <LinkIcon className="h-3 w-3" />
-                                  </button>
-                                  <div className="w-px h-5 bg-slate-300 mx-1" />
-
-                                  {/* Upload and Insert Image */}
-                                  <label className="px-2.5 py-1 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer text-[10px] font-bold shadow-sm flex items-center gap-1">
-                                    <Upload className="h-3 w-3" />
-                                    Add Body Image
-                                    <input
-                                      type="file"
-                                      accept="image/*"
-                                      className="hidden"
-                                      onChange={async (e) => {
-                                        const file = e.target.files?.[0];
-                                        const inputEl = e.target;
-                                        if (!file) return;
-                                        const formData = new FormData();
-                                        formData.append("file", file);
-                                        formData.append(
-                                          "siteId",
-                                          selectedSite || "general",
-                                        );
-                                        try {
-                                          const res = await fetch(
-                                            "/api/upload",
-                                            {
-                                              method: "POST",
-                                              body: formData,
-                                            },
-                                          );
-                                          if (res.ok) {
-                                            const json = await res.json();
-                                            insertEditorImage(
-                                              json.url,
-                                              file.name,
-                                            );
-                                          } else {
-                                            alert("Failed to upload image.");
-                                          }
-                                        } catch (err) {
-                                          console.error(err);
-                                          alert("Upload error.");
-                                        } finally {
-                                          inputEl.value = "";
-                                        }
-                                      }}
-                                    />
-                                  </label>
-                                </div>
-
-                                {/* Image alignment & size toolbar — shown when an image is selected */}
-                                {selectedEditorImage && (
-                                  <div className="bg-indigo-50 border-b border-indigo-200 px-3 py-2 flex flex-wrap items-center gap-2 text-[10px] shrink-0">
-                                    <span className="font-bold text-indigo-700">
-                                      Image:
-                                    </span>
-                                    <div className="flex gap-1">
-                                      {(
-                                        [
-                                          ["left", "⬅ Left"],
-                                          ["center", "◻ Center"],
-                                          ["right", "➡ Right"],
-                                        ] as const
-                                      ).map(([align, label]) => (
-                                        <button
-                                          key={align}
-                                          type="button"
-                                          onClick={() =>
-                                            applyEditorImageAlign(align)
-                                          }
-                                          className={`px-2 py-1 rounded border font-bold transition-colors ${
-                                            getEditorImageAlign(
-                                              selectedEditorImage,
-                                            ) === align
-                                              ? "bg-indigo-600 border-indigo-600 text-white"
-                                              : "bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-                                          }`}
-                                        >
-                                          {label}
-                                        </button>
-                                      ))}
-                                    </div>
-                                    <div className="w-px h-4 bg-indigo-200" />
-                                    <span className="font-bold text-indigo-700">
-                                      Size:
-                                    </span>
-                                    <div className="flex gap-1">
-                                      {[25, 40, 60, 80, 100].map((pct) => (
-                                        <button
-                                          key={pct}
-                                          type="button"
-                                          onClick={() =>
-                                            applyEditorImageWidth(pct)
-                                          }
-                                          className={`px-2 py-1 rounded border font-bold transition-colors ${
-                                            getEditorImageWidth(
-                                              selectedEditorImage,
-                                            ) === pct
-                                              ? "bg-indigo-600 border-indigo-600 text-white"
-                                              : "bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-                                          }`}
-                                        >
-                                          {pct}%
-                                        </button>
-                                      ))}
-                                    </div>
-                                    <div className="w-px h-4 bg-indigo-200" />
-                                    <button
-                                      type="button"
-                                      onClick={editEditorImageAlt}
-                                      className="px-2 py-1 rounded border border-indigo-200 bg-white text-indigo-700 font-bold hover:bg-indigo-50"
-                                    >
-                                      Edit Alt Text
-                                    </button>
-                                    <label className="px-2 py-1 rounded border border-indigo-200 bg-white text-indigo-700 font-bold hover:bg-indigo-50 cursor-pointer">
-                                      Replace Image
-                                      <input
-                                        type="file"
-                                        accept="image/*"
-                                        className="hidden"
-                                        onChange={(e) => {
-                                          const file = e.target.files?.[0];
-                                          if (file) {
-                                            replaceEditorImage(file);
-                                          }
-                                        }}
-                                      />
-                                    </label>
-                                    <button
-                                      type="button"
-                                      onClick={removeEditorImage}
-                                      className="px-2 py-1 rounded border border-red-200 bg-white text-red-600 font-bold hover:bg-red-50"
-                                    >
-                                      Remove
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={deselectEditorImage}
-                                      className="ml-auto px-2 py-1 text-slate-500 font-bold hover:text-slate-700"
-                                    >
-                                      Done
-                                    </button>
-                                  </div>
-                                )}
-
-                                {/* Content Editable Container */}
-                                <div
-                                  contentEditable
-                                  suppressContentEditableWarning
-                                  onInput={(e) => {
-                                    const html = e.currentTarget.innerHTML;
-                                    updateBlogForm({ content: html });
-                                  }}
-                                  onBlur={(e) => {
-                                    if (selectedEditorImage) {
-                                      selectedEditorImage.style.outline = "";
-                                      selectedEditorImage.style.outlineOffset =
-                                        "";
-                                    }
-                                    const html = e.currentTarget.innerHTML;
-                                    updateBlogForm({ content: html });
-                                  }}
-                                  onMouseUp={saveEditorSelection}
-                                  onKeyUp={saveEditorSelection}
-                                  onKeyDown={handleEditorKeyDown}
-                                  onPaste={handleEditorPaste}
-                                  onPointerDown={handleEditorPointerDown}
-                                  onPointerMove={handleEditorPointerMove}
-                                  onPointerUp={handleEditorPointerUp}
-                                  onPointerCancel={handleEditorPointerCancel}
-                                  onDragStart={(e) => e.preventDefault()}
-                                  onDrop={handleEditorDrop}
-                                  onDragEnd={handleEditorDrop}
-                                  className="w-full h-[400px] overflow-y-auto bg-white text-slate-900 p-6 focus:outline-none blog-visual-editor-content prose max-w-none"
-                                  style={{ minHeight: "350px" }}
-                                  ref={(el) => {
-                                    editorRef.current = el;
-                                    if (
-                                      el &&
-                                      document.activeElement !== el &&
-                                      el.innerHTML !== (blogForm.content || "")
-                                    ) {
-                                      el.innerHTML = blogForm.content || "";
-                                    }
-                                  }}
-                                  onClick={(e) => {
-                                    const target = e.target as HTMLElement;
-                                    if (target.tagName === "IMG") {
-                                      selectEditorImage(
-                                        target as HTMLImageElement,
-                                      );
-                                    } else {
-                                      deselectEditorImage();
-                                    }
-                                  }}
-                                />
-
-                                {/* Editor Tips Footer */}
-                                <div className="bg-slate-50 border-t border-slate-200 px-3 py-1.5 flex items-center justify-between text-[10px] text-slate-500 select-none shrink-0">
-                                  <span>
-                                    💡 Click an image to align/resize it, or
-                                    drag it to reposition anywhere in the post.
-                                  </span>
-                                  <span className="font-bold text-indigo-600">
-                                    Visual Editor Active
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                            return editorContent;
-                          })()}
+                          <BlogEditor
+                            key={formLoadId}
+                            value={blogForm.content || ""}
+                            onChange={(html) => updateBlogForm({ content: html })}
+                            siteId={selectedSite}
+                          />
                         </div>
+                      </div>
+                    </div>
+
+                    {/* Page Layout & Live Preview */}
+                    <div className="space-y-3 pt-4 border-t border-slate-800/80">
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Page Layout &amp; Live Preview
+                      </h4>
+                      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+                        <div className="lg:col-span-2 space-y-4">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[10px] font-semibold text-slate-400">
+                                Left Margin
+                              </label>
+                              <span className="text-[10px] font-mono text-indigo-400">
+                                {blogForm.marginLeft ?? 0}px
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="range"
+                                min={0}
+                                max={160}
+                                step={4}
+                                value={blogForm.marginLeft ?? 0}
+                                onChange={(e) =>
+                                  updateBlogForm({ marginLeft: Number(e.target.value) })
+                                }
+                                className="flex-1 accent-indigo-600"
+                              />
+                              <input
+                                type="number"
+                                min={0}
+                                max={160}
+                                value={blogForm.marginLeft ?? 0}
+                                onChange={(e) =>
+                                  updateBlogForm({ marginLeft: Number(e.target.value) || 0 })
+                                }
+                                className="w-16 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[10px] font-semibold text-slate-400">
+                                Right Margin
+                              </label>
+                              <span className="text-[10px] font-mono text-indigo-400">
+                                {blogForm.marginRight ?? 0}px
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="range"
+                                min={0}
+                                max={160}
+                                step={4}
+                                value={blogForm.marginRight ?? 0}
+                                onChange={(e) =>
+                                  updateBlogForm({ marginRight: Number(e.target.value) })
+                                }
+                                className="flex-1 accent-indigo-600"
+                              />
+                              <input
+                                type="number"
+                                min={0}
+                                max={160}
+                                value={blogForm.marginRight ?? 0}
+                                onChange={(e) =>
+                                  updateBlogForm({ marginRight: Number(e.target.value) || 0 })
+                                }
+                                className="w-16 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500"
+                              />
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            Adds breathing room on the sides of this post on the live site.
+                            Drag the sliders and watch the preview update on the right.
+                          </p>
+                        </div>
+                        <div className="lg:col-span-3">
+                          <div className="flex justify-end mb-1.5">
+                            <button
+                              type="button"
+                              onClick={() => previewIframeRef.current?.requestFullscreen()}
+                              className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 hover:text-indigo-400 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 transition-colors"
+                            >
+                              <Maximize2 className="h-3 w-3" />
+                              Fullscreen
+                            </button>
+                          </div>
+                          <iframe
+                            ref={previewIframeRef}
+                            src="/preview/blog"
+                            title="Live preview"
+                            className="w-full h-[420px] rounded-lg border border-slate-800 bg-white"
+                            onLoad={() => {
+                              previewIframeRef.current?.contentWindow?.postMessage(
+                                {
+                                  type: "BLOG_PREVIEW_UPDATE",
+                                  title: blogForm.title || "",
+                                  html: blogForm.content || "",
+                                  marginLeft: blogForm.marginLeft ?? 0,
+                                  marginRight: blogForm.marginRight ?? 0,
+                                  siteId: selectedSite,
+                                },
+                                window.location.origin,
+                              );
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Compose: Text + Images -> Blog HTML */}
+                    <div className="space-y-3 pt-4 border-t border-slate-800/80">
+                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Quick Compose: Text + Images → Blog HTML
+                      </h4>
+                      <p className="text-[10px] text-slate-500">
+                        Write or paste your article text, add any images, and we&apos;ll turn it
+                        into formatted blog content below — no typing HTML required.
+                      </p>
+                      <textarea
+                        rows={6}
+                        value={quickText}
+                        onChange={(e) => setQuickText(e.target.value)}
+                        placeholder="Write or paste your article text here. Leave a blank line between paragraphs."
+                        className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500"
+                      />
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="bg-slate-900 border border-slate-800 hover:bg-slate-850 text-slate-200 text-xs px-3.5 py-2 rounded-lg cursor-pointer flex items-center gap-1.5 font-bold transition-all">
+                          <Upload className="h-3.5 w-3.5 text-indigo-400" />
+                          {quickImages.length > 0
+                            ? `${quickImages.length} image(s) selected`
+                            : "Upload Images"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            onChange={(e) =>
+                              setQuickImages(Array.from(e.target.files || []))
+                            }
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleQuickCompose}
+                          disabled={quickConverting || !quickText.trim()}
+                          className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold px-3.5 py-2 rounded-lg transition-colors"
+                        >
+                          {quickConverting ? "Converting..." : "Convert to Blog HTML"}
+                        </button>
                       </div>
                     </div>
 
@@ -3200,6 +2360,22 @@ export default function Dashboard() {
               siteId={selectedSite}
               onClose={() => setShowAiWizard(false)}
               onGenerated={handleAiBlogGenerated}
+            />
+          )}
+
+          {showImportModal && (
+            <ImportDocumentModal
+              siteId={selectedSite}
+              onClose={() => setShowImportModal(false)}
+              onImported={handleDocumentImported}
+            />
+          )}
+
+          {showModifyModal && (
+            <ModifyHtmlModal
+              currentHtml={blogForm.content || ""}
+              onClose={() => setShowModifyModal(false)}
+              onModified={handleHtmlModified}
             />
           )}
 

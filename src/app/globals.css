@@ -61,9 +61,69 @@ body {
   scrollbar-width: none;
 }
 
-.blog-visual-editor-content:empty::before {
-  content: "Start writing your article…";
+.tiptap-editor-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
   color: #94a3b8;
   pointer-events: none;
-  display: block;
+  height: 0;
+}
+
+.tiptap-editor-content table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 1rem 0;
+}
+.tiptap-editor-content table td,
+.tiptap-editor-content table th {
+  border: 1px solid #cbd5e1;
+  padding: 6px 10px;
+  vertical-align: top;
+}
+.tiptap-editor-content table th {
+  background-color: #f1f5f9;
+  font-weight: 700;
+  text-align: left;
+}
+
+/* Tailwind's preflight resets heading/list/blockquote styling to `inherit`,
+   which left the old editor's headings indistinguishable from body text.
+   This gives the WYSIWYG view real visual hierarchy while editing. */
+.tiptap-editor-content h2 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  margin: 1.5rem 0 0.75rem;
+  color: #0f172a;
+}
+.tiptap-editor-content h3 {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 1.25rem 0 0.5rem;
+  color: #0f172a;
+}
+.tiptap-editor-content p {
+  margin: 0 0 1rem;
+}
+.tiptap-editor-content ul,
+.tiptap-editor-content ol {
+  margin: 0 0 1rem;
+  padding-left: 1.4rem;
+}
+.tiptap-editor-content ul {
+  list-style-type: disc;
+}
+.tiptap-editor-content ol {
+  list-style-type: decimal;
+}
+.tiptap-editor-content blockquote {
+  border-left: 4px solid #6366f1;
+  padding-left: 1rem;
+  font-style: italic;
+  margin: 1rem 0;
+  color: #475569;
+}
+.tiptap-editor-content a {
+  color: #4f46e5;
+  text-decoration: underline;
 }
