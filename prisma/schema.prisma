@@ -69,8 +69,6 @@ model Blog {
   tags           String?    // Comma-separated values
   template       String?    // Which AI blog template generated this post (classic, listicle, howto, comparison, news)
   publishedAt    DateTime   @default(now())
-  marginLeft     Int        @default(0) // px of left padding wrapped around `content` HTML for display on the public site
-  marginRight    Int        @default(0) // px of right padding wrapped around `content` HTML for display on the public site
 
   // Custom SEO Overrides for Blog
   seoTitle       String?
