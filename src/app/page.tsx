@@ -967,56 +967,28 @@ export default function Dashboard() {
     });
   };
 
-  // Fetches the post fresh (rather than reusing the list-cached copy, whose
-  // `content` is the margin-wrapped version meant for the public site) so the
-  // editor always receives the plain, unwrapped HTML — see marginWrapper.ts.
-  const selectBlogForEdit = async (blog: BlogPost) => {
-    confirmDiscardIfDirty(async () => {
+  const selectBlogForEdit = (blog: BlogPost) => {
+    confirmDiscardIfDirty(() => {
       setSelectedBlog(blog);
-      setAiPrompt(blog.title || "");
-      try {
-        const res = await fetch(
-          `/api/blogs/${blog.slug}?siteId=${selectedSite}&forEditing=true`,
-        );
-        const fresh = res.ok ? await res.json() : blog;
-        setBlogForm({
-          title: fresh.title || "",
-          slug: fresh.slug || "",
-          summary: fresh.summary || "",
-          content: fresh.content || "",
-          featuredImage: fresh.featuredImage || "",
-          published: fresh.published || false,
-          category: fresh.category || "",
-          tags: fresh.tags || "",
-          seoTitle: fresh.seoTitle || "",
-          seoDescription: fresh.seoDescription || "",
-          seoOgImage: fresh.seoOgImage || "",
-          template: fresh.template || "",
-        });
-      } catch (err) {
-        console.warn(
-          "Failed to fetch fresh post for editing, using cached copy:",
-          err,
-        );
-        setBlogForm({
-          title: blog.title || "",
-          slug: blog.slug || "",
-          summary: blog.summary || "",
-          content: blog.content || "",
-          featuredImage: blog.featuredImage || "",
-          published: blog.published || false,
-          category: blog.category || "",
-          tags: blog.tags || "",
-          seoTitle: blog.seoTitle || "",
-          seoDescription: blog.seoDescription || "",
-          seoOgImage: blog.seoOgImage || "",
-          template: blog.template || "",
-        });
-      }
+      setBlogForm({
+        title: blog.title || "",
+        slug: blog.slug || "",
+        summary: blog.summary || "",
+        content: blog.content || "",
+        featuredImage: blog.featuredImage || "",
+        published: blog.published || false,
+        category: blog.category || "",
+        tags: blog.tags || "",
+        seoTitle: blog.seoTitle || "",
+        seoDescription: blog.seoDescription || "",
+        seoOgImage: blog.seoOgImage || "",
+        template: blog.template || "",
+      });
       setBlogFormDirty(false);
       slugManuallyEditedRef.current = false;
       setContentViewMode("raw");
       setFormLoadId((id) => id + 1);
+      setAiPrompt(blog.title || "");
     });
   };
   return (
@@ -2014,95 +1986,40 @@ export default function Dashboard() {
                       </div>
                     </div>
 
-                    {/* Page Layout & Live Preview */}
+                    {/* Live Preview */}
                     <div className="space-y-3 pt-4 border-t border-slate-800/80">
-                      <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                        Page Layout &amp; Live Preview
-                      </h4>
-                      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-                        <div className="lg:col-span-2 space-y-4">
-                          <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="text-[10px] font-semibold text-slate-400">
-                                Left Margin
-                              </label>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="range"
-                                min={0}
-                                max={160}
-                                step={4}
-                                className="flex-1 accent-indigo-600"
-                              />
-                              <input
-                                type="number"
-                                min={0}
-                                max={160}
-                                className="w-16 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500"
-                              />
-                            </div>
-                          </div>
-                          <div>
-                            <div className="flex items-center justify-between mb-1">
-                              <label className="text-[10px] font-semibold text-slate-400">
-                                Right Margin
-                              </label>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <input
-                                type="range"
-                                min={0}
-                                max={160}
-                                step={4}
-                                className="flex-1 accent-indigo-600"
-                              />
-                              <input
-                                type="number"
-                                min={0}
-                                max={160}
-                                className="w-16 bg-slate-950 border border-slate-800 text-slate-200 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-indigo-500"
-                              />
-                            </div>
-                          </div>
-                          <p className="text-[10px] text-slate-500">
-                            Adds breathing room on the sides of this post on the
-                            live site. Drag the sliders and watch the preview
-                            update on the right.
-                          </p>
-                        </div>
-                        <div className="lg:col-span-3">
-                          <div className="flex justify-end mb-1.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                previewIframeRef.current?.requestFullscreen()
-                              }
-                              className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 hover:text-indigo-400 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 transition-colors"
-                            >
-                              <Maximize2 className="h-3 w-3" />
-                              Fullscreen
-                            </button>
-                          </div>
-                          <iframe
-                            ref={previewIframeRef}
-                            src="/preview/blog"
-                            title="Live preview"
-                            className="w-full h-[420px] rounded-lg border border-slate-800 bg-white"
-                            onLoad={() => {
-                              previewIframeRef.current?.contentWindow?.postMessage(
-                                {
-                                  type: "BLOG_PREVIEW_UPDATE",
-                                  title: blogForm.title || "",
-                                  html: blogForm.content || "",
-                                  siteId: selectedSite,
-                                },
-                                window.location.origin,
-                              );
-                            }}
-                          />
-                        </div>
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          Live Preview
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            previewIframeRef.current?.requestFullscreen()
+                          }
+                          className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 hover:text-indigo-400 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 transition-colors"
+                        >
+                          <Maximize2 className="h-3 w-3" />
+                          Fullscreen
+                        </button>
                       </div>
+                      <iframe
+                        ref={previewIframeRef}
+                        src="/preview/blog"
+                        title="Live preview"
+                        className="w-full h-[420px] rounded-lg border border-slate-800 bg-white"
+                        onLoad={() => {
+                          previewIframeRef.current?.contentWindow?.postMessage(
+                            {
+                              type: "BLOG_PREVIEW_UPDATE",
+                              title: blogForm.title || "",
+                              html: blogForm.content || "",
+                              siteId: selectedSite,
+                            },
+                            window.location.origin,
+                          );
+                        }}
+                      />
                     </div>
 
                     {/* Quick Compose: Text + Images -> Blog HTML */}
